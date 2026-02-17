@@ -1,0 +1,14 @@
+((synopsis "SRFI 170: POSIX API")
+ (author "Chris Bitmead")
+ (maintainer "Chris Bitmead")
+ (category data)
+ (license "MIT")
+ (version "1.0.0")
+ (dependencies
+   srfi-1
+   srfi-13
+   srfi-19
+   srfi-121)
+ (test-dependencies test)
+ (components
+  (extension srfi-170)))
