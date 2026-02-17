@@ -13,7 +13,7 @@ sed -i "s/(version \".*\")/(version \"$VERSION\")/" srfi-170.egg
 # 2. Add version to .release-info (before the last closing parenthesis)
 # This assumes a specific format; it's often easier to just edit manually
 # but here is a basic append logic:
-sed -i "/(tags/a \  (\"$VERSION\" \"$TAG\")" srfi-170.release-info
+sed -i "/(uri/a \  (release \"$VERSION\" \"$TAG\")" srfi-170.release-info
 
 # 3. Git dance
 git add srfi-170.egg srfi-170.release-info
