@@ -3,7 +3,7 @@
  (maintainer "Chris Bitmead")
  (category data)
  (license "MIT")
- (version "0.4")
+ (version "0.5")
  (dependencies
    srfi-1
    srfi-13
