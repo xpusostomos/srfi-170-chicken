@@ -1,7 +1,7 @@
 ((repo git "https://github.com/xpusostomos/srfi-170-chicken.git")
- (uri targz "https://github.com/xpusostomos/srfi-170-chicken/archive/{ref}.tar.gz")
-  (release "0.3" "v0.3")
- (release "0.2" "v0.2")
- (release "0.1" "v0.1")
- (release "master" "master"))
+ (uri targz "https://github.com/xpusostomos/srfi-170-chicken/archive/v{egg-release}.tar.gz")
+ (release "0.3")
+ (release "0.2")
+ (release "0.1")
+ (release "master"))
  
