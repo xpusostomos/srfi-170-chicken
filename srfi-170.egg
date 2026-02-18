@@ -9,6 +9,6 @@
    srfi-13
    srfi-19
    srfi-121)
- (test-dependencies test)
+; (test-dependencies test)
  (components
   (extension srfi-170)))

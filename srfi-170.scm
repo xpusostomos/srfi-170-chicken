@@ -1,17 +1,58 @@
-;;
-;; Implementation of the SRFI-170 spec
-;; Some of these functions exist in one form or another in other eggs.
-;; In these cases it's hard to decide whether to reimplement from scratch
-;; or to piggy back off them. In most (but not all) cases I've take tne
-;; approach to reimplement from scratch, partly on the assumption that those
-;; other eggs might want to reliquish resonsibility for them for the standard,
-;; partly because the spec has specific error reporting, which they may
-;; not implement.
-;; It's an open question whether this spec has a better interface than
-;; some of those other specs. I think at least some of them are better here.
-;; For example, the option to use open-directory to control the open/close
-;; lifecycle, and file-info which has named getters.
-;;
+
+@(== "Abstract")
+
+@(" The host environment is the set of resources, such as the filesystem, network and processes, that are managed by the operating system on top of which a Scheme program is executing. This SRFI specifies some of the ways the host environment can be accessed from within a Scheme program. It does so by leveraging widespread support for POSIX, the Portable Operating System Interface standardized by the IEEE. Not all of the functions of this SRFI are available on all operating systems.
+")
+
+@(== "Rationale")
+
+@("The I/O and other environmental procedures provided by the various Scheme standards were designed at a time when operating systems were far more diverse than they are today, and therefore portability was difficult or impossible to achieve. In addition, Scheme has historically focused on programming-language features rather than the practical needs of mainstream software development. Consequently, none of the standards provide more than a limited set of operations. Individual implementations often provide much more, but in incompatible ways.")
+
+@("This SRFI uses the IEEE 1003 POSIX.1-2017 standard to provide maximally portable access to the services of the operating system on which typical Scheme implementations run. Almost all operating systems today support all or part of POSIX, so the use of this SRFI is mostly portable, but implementations are definitely not portable. However, an implementation of this SRFI can be layered over many existing implementation-specific interfaces, or directly over a C FFI. It is even possible to implement it on top of the JVM and CLR virtual machines.")
+
+@("This SRFI describes a specific POSIX API for Scheme. Rather than attempting to compromise between existing implementations, the scsh system call specification was chosen as a base document. Consequently, this SRFI is a reduced and heavily edited version of Chapter 3, \"System Calls\" of version 0.6.7 of the Scsh Reference Manual. The numbered headers are aligned with those used in the Reference Manual.")
+
+@("Scsh 0.6.7 was chosen for two main reasons. It is fairly old, so most of its operations, even those which were non-POSIX at the time (2006) are now included in POSIX, and it has few or no operations that aren't POSIX at all. In addition, it is politically fairly neutral, being tied to an obsolete version of Scheme 48, an implementation which is not being actively developed. Scsh 0.7 exists and runs on the current version of Scheme 48 (see Implementation section), but was not used in designing this SRFI because it is incompletely documented.")
+
+@(== "Implementation Notes")
+
+@("Some of these functions exist in one form or another in other eggs.
+In particular, this egg is in some ways in competition with the (chicken file posix)
+module. 
+It's an open question whether this spec has a better interface than
+(chicken file posix) or some of those other specs. I think in many respects
+the API is better here.
+For example, the option to use open-directory to control the open/close
+lifecycle, and file-info which has named getters.
+It being the case, that this reinvents some of these internal chicken modules,
+it's hard to decide whether to reimplement from scratch
+or to piggy back off them. In most (but not all) cases I've take the
+approach to reimplement from scratch, partly on the assumption that those
+other eggs might want to reliquish resonsibility for them for the standard,
+partly because the srfi spec has specific error reporting, which they may
+not implement.")
+
+@("One notable question was what to do about ports. I could have just relied on
+(chicken port) and bypassed (chicken file posix) altogether, and in many ways
+I would have preferred that. On the other hand, that would have made this module
+non interoperable with (chicken file posix) in one important respect: the
+ports returned by (chicken file posix) contain the file descriptor and implement
+(port->fileno), so the ports returned would not have interoperated with ports here
+had I done that. In many ways, that doesn't seem like a big deal, because
+(chicken file posix) does not contain many extra features, and I intend to add those
+features here anyway so that users can at least bypass it in favor of this.
+On the other hand, it's at least conceivable that you may want to include
+some other scheme library that uses (chicken file posix) so that would have
+potentially been a headache. So I've taken the pragmatic approach, and
+I allow (chicken file posix) to create the port, just so it can be the custodian
+of the file descriptor and allow interoperability")
+
+@("I have made a small amount of effort to make the code here work on
+Windows, but have not tested it as of yet, and I have no idea what might
+be required to make it actually work or what (chicken file posix) does about that.
+I've made a good faith effort to make it compatible with BSD and MacOS, but have
+not tested it there either. File a bug report if it doesn't work for you.")
+
 (module srfi-170 (
 				  posix-error?
 				  posix-error-name
@@ -140,18 +181,207 @@
   (import (only (chicken string) string-split))
   (import (only (chicken irregex) irregex-replace))
 
+  @(== "Error Handling")
+
+  @(" The C binding of POSIX places an error number in the global variable errno to report an error, along with (in most cases) returning a sentinel value such as -1. However, the procedures of this SRFI work differently. Rather than reporting errors as return values, they report errors by signaling condition objects satisfying the predicate posix-error? defined below.")
+
+  @("This SRFI provides three procedures which will typically be shims over whatever the implementation uses to report such errors:")
+
   (define c-error-name
-	(foreign-lambda* c-string ((int err))
-      "switch(err) {
+  (foreign-lambda* c-string ((int err))
+    "switch(err) {
+      /* Core POSIX Errors (Standard on virtually all systems) */
       case EACCES:       C_return(\"EACCES\");
+      case E2BIG:        C_return(\"E2BIG\");
+      case EBADF:        C_return(\"EBADF\");
+      case EBUSY:        C_return(\"EBUSY\");
+      case ECHILD:       C_return(\"ECHILD\");
+      case EDOM:         C_return(\"EDOM\");
+      case EEXIST:       C_return(\"EEXIST\");
+      case EFAULT:       C_return(\"EFAULT\");
+      case EFBIG:        C_return(\"EFBIG\");
+      case EINTR:        C_return(\"EINTR\");
+      case EINVAL:       C_return(\"EINVAL\");
       case EIO:          C_return(\"EIO\");
-      case ELOOP:        C_return(\"ELOOP\");
+      case EISDIR:       C_return(\"EISDIR\");
+      case EMFILE:       C_return(\"EMFILE\");
+      case EMLINK:       C_return(\"EMLINK\");
       case ENAMETOOLONG: C_return(\"ENAMETOOLONG\");
+      case ENFILE:       C_return(\"ENFILE\");
+      case ENODEV:       C_return(\"ENODEV\");
       case ENOENT:       C_return(\"ENOENT\");
-      case ENOTDIR:      C_return(\"ENOTDIR\");
+      case ENOEXEC:      C_return(\"ENOEXEC\");
       case ENOMEM:       C_return(\"ENOMEM\");
+      case ENOSPC:       C_return(\"ENOSPC\");
+      case ENOTDIR:      C_return(\"ENOTDIR\");
+      case ENOTTY:       C_return(\"ENOTTY\");
+      case ENXIO:        C_return(\"ENXIO\");
+      case EPERM:        C_return(\"EPERM\");
+      case EPIPE:        C_return(\"EPIPE\");
+      case ERANGE:       C_return(\"ERANGE\");
+      case EROFS:        C_return(\"EROFS\");
+      case ESPIPE:       C_return(\"ESPIPE\");
+      case ESRCH:        C_return(\"ESRCH\");
+      case EXDEV:        C_return(\"EXDEV\");
+
+      /* Primary Error with potential Aliases */
+      case EAGAIN:       C_return(\"EAGAIN\");
+      case EDEADLK:      C_return(\"EDEADLK\");
+
+      #ifdef ENOTSUP
+      case ENOTSUP:      C_return(\"ENOTSUP\");
+      #endif
+
+      /* Aggressive Alias Protection: Only include if defined AND distinct */
+      #if defined(EWOULDBLOCK) && (EWOULDBLOCK != EAGAIN)
+      case EWOULDBLOCK:  C_return(\"EWOULDBLOCK\");
+      #endif
+
+      #if defined(EDEADLOCK) && (EDEADLOCK != EDEADLK)
+      case EDEADLOCK:    C_return(\"EDEADLOCK\");
+      #endif
+
+      #if defined(EOPNOTSUPP) && (!defined(ENOTSUP) || (EOPNOTSUPP != ENOTSUP))
+      case EOPNOTSUPP:   C_return(\"EOPNOTSUPP\");
+      #endif
+
+      /* Networking & Advanced POSIX (ifdefed for existence) */
+      #ifdef EADDRINUSE
+      case EADDRINUSE:   C_return(\"EADDRINUSE\");
+      #endif
+      #ifdef EADDRNOTAVAIL
+      case EADDRNOTAVAIL:C_return(\"EADDRNOTAVAIL\");
+      #endif
+      #ifdef EAFNOSUPPORT
+      case EAFNOSUPPORT: C_return(\"EAFNOSUPPORT\");
+      #endif
+      #ifdef EALREADY
+      case EALREADY:     C_return(\"EALREADY\");
+      #endif
+      #ifdef EBADMSG
+      case EBADMSG:      C_return(\"EBADMSG\");
+      #endif
+      #ifdef ECANCELED
+      case ECANCELED:    C_return(\"ECANCELED\");
+      #endif
+      #ifdef ECONNABORTED
+      case ECONNABORTED: C_return(\"ECONNABORTED\");
+      #endif
+      #ifdef ECONNREFUSED
+      case ECONNREFUSED: C_return(\"ECONNREFUSED\");
+      #endif
+      #ifdef ECONNRESET
+      case ECONNRESET:   C_return(\"ECONNRESET\");
+      #endif
+      #ifdef EDESTADDRREQ
+      case EDESTADDRREQ: C_return(\"EDESTADDRREQ\");
+      #endif
+      #ifdef EDQUOT
+      case EDQUOT:       C_return(\"EDQUOT\");
+      #endif
+      #ifdef EHOSTUNREACH
+      case EHOSTUNREACH: C_return(\"EHOSTUNREACH\");
+      #endif
+      #ifdef EIDRM
+      case EIDRM:        C_return(\"EIDRM\");
+      #endif
+      #ifdef EILSEQ
+      case EILSEQ:       C_return(\"EILSEQ\");
+      #endif
+      #ifdef EINPROGRESS
+      case EINPROGRESS:  C_return(\"EINPROGRESS\");
+      #endif
+      #ifdef EISCONN
+      case EISCONN:      C_return(\"EISCONN\");
+      #endif
+      #ifdef ELOOP
+      case ELOOP:        C_return(\"ELOOP\");
+      #endif
+      #ifdef EMSGSIZE
+      case EMSGSIZE:     C_return(\"EMSGSIZE\");
+      #endif
+      #ifdef EMULTIHOP
+      case EMULTIHOP:    C_return(\"EMULTIHOP\");
+      #endif
+      #ifdef ENETDOWN
+      case ENETDOWN:     C_return(\"ENETDOWN\");
+      #endif
+      #ifdef ENETRESET
+      case ENETRESET:    C_return(\"ENETRESET\");
+      #endif
+      #ifdef ENETUNREACH
+      case ENETUNREACH:  C_return(\"ENETUNREACH\");
+      #endif
+      #ifdef ENOBUFS
+      case ENOBUFS:      C_return(\"ENOBUFS\");
+      #endif
+      #ifdef ENODATA
+      case ENODATA:      C_return(\"ENODATA\");
+      #endif
+      #ifdef ENOLCK
+      case ENOLCK:       C_return(\"ENOLCK\");
+      #endif
+      #ifdef ENOLINK
+      case ENOLINK:      C_return(\"ENOLINK\");
+      #endif
+      #ifdef ENOMSG
+      case ENOMSG:       C_return(\"ENOMSG\");
+      #endif
+      #ifdef ENOPROTOOPT
+      case ENOPROTOOPT:  C_return(\"ENOPROTOOPT\");
+      #endif
+      #ifdef ENOSR
+      case ENOSR:        C_return(\"ENOSR\");
+      #endif
+      #ifdef ENOSTR
+      case ENOSTR:       C_return(\"ENOSTR\");
+      #endif
+      #ifdef ENOSYS
+      case ENOSYS:       C_return(\"ENOSYS\");
+      #endif
+      #ifdef ENOTCONN
+      case ENOTCONN:     C_return(\"ENOTCONN\");
+      #endif
+      #ifdef ENOTEMPTY
+      case ENOTEMPTY:    C_return(\"ENOTEMPTY\");
+      #endif
+      #ifdef ENOTRECOVERABLE
+      case ENOTRECOVERABLE: C_return(\"ENOTRECOVERABLE\");
+      #endif
+      #ifdef ENOTSOCK
+      case ENOTSOCK:     C_return(\"ENOTSOCK\");
+      #endif
+      #ifdef EOVERFLOW
+      case EOVERFLOW:    C_return(\"EOVERFLOW\");
+      #endif
+      #ifdef EOWNERDEAD
+      case EOWNERDEAD:   C_return(\"EOWNERDEAD\");
+      #endif
+      #ifdef EPROTO
+      case EPROTO:       C_return(\"EPROTO\");
+      #endif
+      #ifdef EPROTONOSUPPORT
+      case EPROTONOSUPPORT: C_return(\"EPROTONOSUPPORT\");
+      #endif
+      #ifdef EPROTOTYPE
+      case EPROTOTYPE:   C_return(\"EPROTOTYPE\");
+      #endif
+      #ifdef ESTALE
+      case ESTALE:       C_return(\"ESTALE\");
+      #endif
+      #ifdef ETIME
+      case ETIME:        C_return(\"ETIME\");
+      #endif
+      #ifdef ETIMEDOUT
+      case ETIMEDOUT:    C_return(\"ETIMEDOUT\");
+      #endif
+      #ifdef ETXTBSY
+      case ETXTBSY:      C_return(\"ETXTBSY\");
+      #endif
+
       default:           C_return(\"UNKNOWN\");
     }"))
+  
 
   (define errno 
 	(foreign-lambda* int () "C_return(errno);"))
@@ -167,7 +397,7 @@
 
   (define (raise-posix-error loc . args)
 	(let* ((err-num (errno))
-           (err-name (c-error-name err-num))
+           (err-name (string->symbol (c-error-name err-num)))
            (err-msg  (c-strerror err-num)))
       (abort
        (make-composite-condition
@@ -182,68 +412,91 @@
 								 'errno err-num 
 								 'name err-name)))))
   
-;;; procedure: (posix-error? obj) -> boolean
-;;; This procedure returns #t if obj is a condition object that 
-;;; describes a POSIX error, and #f otherwise.
-;;; Note: This must handle the condition properties 'posix, 'name, 
-;;; and 'message as defined in the CHICKEN core.
-  (define (posix-error? c)
-	((condition-predicate 'posix-error) c))
+  (define (posix-error? obj)
+	@("This procedure returns #t if obj is a condition object that describes a POSIX error, and #f otherwise."
+	  (obj "A condition error object")
+	  (@to "boolean"))
+	((condition-predicate 'posix-error) obj))
+  
+  (define (posix-error-name posix-error)
+	@("This procedure returns a symbol that is the name associated with the value of errno when the POSIX function reported an error. This can be used to provide programmatic recovery when a POSIX function can return more than one value of errno.
+    Because the errno codes are not standardized across different POSIX systems, but the associated names (bound by a #define in the file /usr/include/errno.h) are the same for the most part, this function returns the name rather than the code.
+    For example, ENOENT (a reference was made to a file or a directory that does not exist) almost always corresponds to an errno value of 2. But although ETIMEDOUT (meaning that a TCP connection has been unresponsive for too long) is standardized by POSIX, it has a errno value of 110 on Linux, 60 on FreeBSD, and 116 on Cygwin."
+	  (posix-error "A condition error object")
+	  (@to "symbol"))
+	(if (and (condition? posix-error) 
+			 ((condition-predicate 'posix-error) posix-error))
+		(get-condition-property posix-error 'posix-error 'name)
+		(error "Object is not a posix-error condition" posix-error)))
+  
+  (define (posix-error-number posix-error)
+	@("Return the errno code. Recommended to use posix-error-name for portability."
+	  (posix-error "A condition error object")
+	  (@to "number"))
+	(if (and (condition? posix-error) 
+			 ((condition-predicate 'posix-error) posix-error))
+		(get-condition-property posix-error 'posix-error 'errno)
+		(error "Object is not a posix-error condition" posix-error)))
 
-;;; procedure: (posix-error-name obj) -> symbol
-  ;;; Returns the symbolic name (a symbol) of the POSIX error described 
-;;; by the condition object obj.
-  (define (posix-error-name err)
-	(if (and (condition? err) 
-			 ((condition-predicate 'posix-error) err))
-		(get-condition-property err 'posix-error 'name)
+  (define (posix-error-message posix-error)
+	@("Returns a human-readable string describing the POSIX error described by the condition object obj."
+	  (posix-error "A condition error object")
+	  (@to "string"))
+	  (if (and (condition? posix-error) 
+			   ((condition-predicate 'posix-error) posix-error))
+		  (get-condition-property posix-error 'posix-error 'message)
+		  (error "Object is not a posix-error condition" posix-error)))
+	
+  (define (posix-error-procedure posix-error)
+	@("The procedure which caused the error"
+	  (posix-error "A condition error object")
+	  (@to "symbol"))
+	(if (and (condition? posix-error) 
+			 ((condition-predicate 'posix-error) posix-error))
+		(get-condition-property posix-error 'posix-error 'location)
+		(error "Object is not a posix-error condition" posix-error)))
+  
+  (define (posix-error-arguments posix-error)
+	@("The arguments passed to the api which caused the error"
+	  (posix-error "A condition error object")
+	  (@to "list"))
+	(if (and (condition? posix-error) 
+			 ((condition-predicate 'posix-error) posix-error))
+		(get-condition-property posix-error 'posix-error 'arguments)
 		(error "Object is not a posix-error condition" err)))
   
-;; procedure: (posix-error-number obj) -> number
-;;; Returns the errno of the POSIX error described 
-;;; by the condition object obj.
-  (define (posix-error-number err)
-	(if (and (condition? err) 
-			 ((condition-predicate 'posix-error) err))
-		(get-condition-property err 'posix-error 'errno)
-		(error "Object is not a posix-error condition" err)))
-
-;;; procedure: (posix-error-message obj) -> string
-;;; Returns a human-readable string describing the POSIX error 
-;;; described by the condition object obj.
-  (define (posix-error-message err)
-	(if (and (condition? err) 
-			 ((condition-predicate 'posix-error) err))
-		(get-condition-property err 'posix-error 'message)
-		(error "Object is not a posix-error condition" err)))
-
-;;; procedure: (posix-error-procedure obj) -> symbol
-;;; Returns a symbol from which api caused the error
-;;; described by the condition object obj.
-  (define (posix-error-procedure err)
-	(if (and (condition? err) 
-			 ((condition-predicate 'posix-error) err))
-		(get-condition-property err 'posix-error 'location)
-		(error "Object is not a posix-error condition" err)))
-
-;;; procedure: (posix-error-arguments obj) -> list
-;;; Returns the arguments passed to the api which caused the error
-;;; described by the condition object obj.
-  (define (posix-error-arguments err)
-	(if (and (condition? err) 
-			 ((condition-predicate 'posix-error) err))
-		(get-condition-property err 'posix-error 'arguments)
-		(error "Object is not a posix-error condition" err)))
-
-  (define binary-input    'binary-input)
-  (define binary-output   'binary-output)
-  (define textual-input   'textual-input)
-  (define textual-output  'textual-output)
-  (define binary-input/output    'binary-input/output)
   
-  (define buffer-none     'none)
-  (define buffer-line     'line)
-  (define buffer-block    'block)
+;;;;;;;;;;;;;; TODO: Implement posix-error-c-function ;;;;;;;;;;;;;;;;;;;;
+  
+  @(== "I/O")
+  
+  @("Dealing with POSIX file descriptors in a Scheme environment is difficult. In POSIX, open files are part of the process environment, and are referenced by small exact integers called file descriptors. Open file descriptors are the fundamental way I/O redirections are passed to subprocesses and executed programs, since file descriptors are preserved across fork and exec operations.")
+  
+  @("Scheme, on the other hand, uses ports for specifying I/O sources and sinks. Ports are garbage-collected Scheme objects, not integers. When a port is garbage collected, it is effectively closed, but whether the underlying file descriptor is closed is left as an implementation detail. Because file descriptors are just integers, it's impossible to garbage collect them.")
+  
+  @("Ideally, a Scheme program could only use ports and not file descriptors. But code written in any language, including Scheme, needs to descend to the file descriptor level in at least two circumstances: when interfacing with foreign code, and when interfacing with a subprocess. ")
+  
+  @("This causes a problem. Suppose we have a Scheme port constructed on top of file descriptor 3. We intend to execute a successor program that will expect this file descriptor. If we drop references to the port, the garbage collector may prematurely close file 3 before the successor program starts.")
+
+  @("Unfortunately, there is no even vaguely portable solution to the general problem. Scsh and Guile undertake heroic measures to open new file descriptors for ports when the old file descriptors are repurposed for something else, and to track when closing a port implies closing its file descriptor or not. But doing so involves more changes than an implementation should have to make in order to provide this SRFI.")
+
+  @("Consequently, this SRFI assumes that file descriptors will only be used at the edges of the program, and that most I/O operations will be performed on ports. As an exception, open-file is provided, because it allows arguments that the Scheme standard does not. It returns a port of a specified type.")
+
+  @("However, as an extension to the spec, many APIs that take ports will be extended to also take file descriptors")
+  
+  (define binary-input @("Binary input")   'binary-input)
+  (define binary-output @("Binary output")  'binary-output)
+  (define textual-input @("Text input")  'textual-input)
+  (define textual-output @("Text output")  'textual-output)
+  (define binary-input/output @("Binary input/output")   'binary-input/output)
+
+  @("Constants whose values represent the type of port to be returned by open-file or fd->port. The textual ports use the same character encoding applied by default in the underlying implementation. The value of binary-input/output represents a binary port that allows both input and output operations, as discussed in SRFI 181.")
+  
+  (define buffer-none @("No buffering")     'none)
+  (define buffer-line @("Buffering at the line level")     'line)
+  (define buffer-block @("Buffering at the block level")   'block)
+
+  @("Constants whose values represent, respectively: the absence of port buffering, where bytes are intended to appear from the source or at the destination as soon as possible; buffering with a block of implementation-dependent size; and buffering line by line, where a line is terminated by a newline byte #xA. The default is implementation-dependent. ")
 
   
   ;; Open-time Flags
@@ -251,8 +504,8 @@
   (define open/write       (foreign-value "O_WRONLY" int))
   (define open/read-write  (foreign-value "O_RDWR"   int))
   (define read-only  (foreign-value "O_RDONLY" int))
-  (define open/create     (foreign-value "O_CREAT"  int))
-  (define open/exclusive  (foreign-value "O_EXCL"   int))
+  (define open/create @("Create file if it doesn't exist") (foreign-value "O_CREAT"  int))
+  (define open/exclusive @("Fails if the file exists") (foreign-value "O_EXCL"   int))
   (define open/truncate   (foreign-value "O_TRUNC"  int))
   (define open/append     (foreign-value "O_APPEND" int))
 
