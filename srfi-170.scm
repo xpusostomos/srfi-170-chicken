@@ -85,7 +85,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 				  set-file-times
 				  truncate-file
 				  file-info
-				  file-info?
+				  file-info
 				  file-info:device
 				  file-info:inode
 				  file-info:mode
@@ -160,6 +160,8 @@ not tested it there either. File a bug report if it doesn't work for you.")
 				  group-info:members
 				  posix-time
 				  monotonic-time
+				  get-environment-variables
+				  get-environment-variable
 				  delete-environment-variable!
 				  terminal?)
   (import scheme)
@@ -170,7 +172,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
   (import (only (chicken file posix) port->fileno open-input-file* open-output-file*))
   (import (chicken foreign))
   (import (only (chicken gc) set-finalizer!))
-  (import (only (chicken process-context) get-environment-variable unset-environment-variable! current-directory))
+  (import (only (chicken process-context) get-environment-variable unset-environment-variable! get-environment-variables))
   (import (only (chicken file) delete-file))
   (import (only (chicken port) set-buffering-mode! terminal-port? make-bidirectional-port))
   (import (chicken base))
@@ -505,8 +507,8 @@ not tested it there either. File a bug report if it doesn't work for you.")
   (define read-only  (foreign-value "O_RDONLY" int))
   (define open/create @("Create file if it doesn't exist") (foreign-value "O_CREAT"  int))
   (define open/exclusive @("Fails if the file exists") (foreign-value "O_EXCL"   int))
-  (define open/truncate   (foreign-value "O_TRUNC"  int))
-  (define open/append     (foreign-value "O_APPEND" int))
+  (define open/truncate @("Truncates the file") (foreign-value "O_TRUNC"  int))
+  (define open/append @("Always appends to the file") (foreign-value "O_APPEND" int))
 
 ;; Optional/Platform-Dependent
   (define open/no-follow  (cond-expand 
@@ -548,10 +550,41 @@ not tested it there either. File a bug report if it doesn't work for you.")
           (error 'fd-get-flags "Could not get file descriptor flags" fd)
           res)))
 
-;;; procedure: (fd->port fd port-type [buffer-mode]) -> port
-;;; Converts an integer file descriptor FD into a Scheme port. 
-;;; PORT-TYPE must be a symbol like 'textual-input.
+
+  (define (open-file fname port-type flags #!optional (permission-bits #o644) (buffer-mode buffer-block))
+	(@ "Opens the file named by fname and returns a port of the type specified by port-type. Flags is an integer bitmask, composed by adding together any of the following constants: open/append, open/create, open/exclusive, open/nofollow, open/truncate. (The POSIX flags O_RDONLY, R_WRONLY, and O_RDWR are inferred from the port type.) Permission-bits defaults to #o666, but are masked by the current umask."
+			 (fname "The file name")
+			 (port-type "constant for binary/textual input/output")
+			 (flags "open/append, open/create, open/exclusive, open/nofollow, open/truncate")
+			 (permission-bits "file permissions, default #0666")
+			 (buffer-mode "buffer-none, buffer-block, buffer-line")
+			 (@to "port"))
+	(let* ((access-mode (cond
+                         ((or (eq? port-type binary-input) 
+                              (eq? port-type textual-input)) open/read)
+                         ((or (eq? port-type binary-output) 
+                              (eq? port-type textual-output)) open/write)
+                         ((eq? port-type binary-input/output) open/read-write)
+                         (else (error 'open-file "invalid port-type" port-type))))
+           
+           (mode-flag (cond
+                       ((or (eq? port-type textual-input) 
+							(eq? port-type textual-output)) open/text)
+                       (else open/binary)))
+           
+           (final-flags (bitwise-ior flags access-mode mode-flag))
+           (fd ((foreign-lambda int "open" c-string int int) fname final-flags permission-bits)))
+      (if (= fd -1)
+          (raise-posix-error 'open-file fname port-type flags permission-bits buffer-mode)
+          (fd->port fd port-type buffer-mode))))
+  
+  
   (define (fd->port fd port-type #!optional (buffer-mode buffer-block))
+	(@ "This procedure wraps a newly created port around the specified file descriptor, effectively importing it into the Scheme world. The most common use of this procedure is for a file descriptor other than 0, 1, 2 (standard input, standard output, standard error) that is already open when the Scheme program starts. It is an error if a port already exists that encapsulates fd, or if an attempt is made to use fd->port twice on the same fd."
+	   (fd "File descriptor")
+	   (port-type "constant for binary/textual input/output")
+	   (buffer-mode "buffer-none, buffer-block, buffer-line")
+	   (@to "port"))
 	(fd-set-mode! fd port-type)
     (let* ((actual-flags (fd-get-flags fd))
            (append?      (not (zero? (bitwise-and actual-flags open/append))))
@@ -576,29 +609,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 		(set-buffering-mode! port chicken-buffering)
 		port)))
 
-;;; procedure: (open-file fname port-type flags [permission-bits [buffer-mode]]) -> port
-;;; Opens the file FNAME and returns a port of PORT-TYPE. FLAGS is a bitwise 
-;;; OR of open/ constants.
-  (define (open-file fname port-type flags #!optional (permission-bits #o644) (buffer-mode buffer-block))
-	(let* ((access-mode (cond
-                         ((or (eq? port-type binary-input) 
-                              (eq? port-type textual-input)) open/read)
-                         ((or (eq? port-type binary-output) 
-                              (eq? port-type textual-output)) open/write)
-                         ((eq? port-type binary-input/output) open/read-write)
-                         (else (error 'open-file "invalid port-type" port-type))))
-           
-           (mode-flag (cond
-                       ((or (eq? port-type textual-input) 
-							(eq? port-type textual-output)) open/text)
-                       (else open/binary)))
-           
-           (final-flags (bitwise-ior flags access-mode mode-flag))
-           (fd ((foreign-lambda int "open" c-string int int) fname final-flags permission-bits)))
-      (if (= fd -1)
-          (raise-posix-error 'open-file fname port-type flags permission-bits buffer-mode)
-          (fd->port fd port-type buffer-mode))))
-  
+	
   (foreign-declare "#include <dirent.h>")
   (foreign-declare "#include <sys/types.h>")
   (foreign-declare "#include <sys/stat.h>")
@@ -613,26 +624,46 @@ not tested it there either. File a bug report if it doesn't work for you.")
   (define-foreign-type off-t int)
 
   (define (create-directory fname #!optional (permission-bits #o775))
+	@("Creates a directory in the file system. If an object with the same name exists, an exception is signaled."
+	  (fname "File name")
+	  (permission-bits "file permission bits")
+	  (@to "undefined"))
 	(let ((res ((foreign-lambda int "mkdir" c-string mode-t) fname permission-bits)))
 	  (if (< res 0)
 		  (raise-posix-error 'create-directory fname))))
 	  
   (define (create-fifo fname #!optional (permission-bits #o664))
+	@("Creates a FIFO in the file system. If an object with the same name exists, an exception is signaled."
+	  (fname "File name")
+	  (permission-bits "file permission bits")
+	  (@to "undefined"))
 	(let ((res ((foreign-lambda int "mkfifo" c-string mode-t) fname permission-bits)))
 	  (if (< res 0)
 		  (raise-posix-error 'create-fifo fname))))
 
   (define (create-hard-link old-fname new-fname)
+	@("Creates a hard link in the file system. If an object with the same name exists, an exception is signaled."
+	  (old-fname "Existing name")
+	  (new-fname "New name")
+	  (permission-bits "file permission bits")
+	  (@to "undefined"))
 	(let ((res ((foreign-lambda int "link" c-string c-string) old-fname new-fname)))
 	  (if (< res 0)
 		  (raise-posix-error 'create-hard-link old-fname new-fname))))
 
   (define (create-symlink old-fname new-fname)
+	@("Creates a symolic link in the file system. If an object with the same name exists, an exception is signaled."
+	  (old-fname "Existing name")
+	  (new-fname "New name")
+	  (@to "undefined"))
 	(let ((res ((foreign-lambda int "symlink" c-string c-string) old-fname new-fname)))
 	  (if (< res 0)
 		  (raise-posix-error 'create-symlink old-fname new-fname))))
 
   (define (read-symlink path)
+	@("Return the filename referenced by the symlink fname."
+	  (fname "path")
+	  (@to "string"))
 	(let* ((c-readlink
 			(foreign-lambda* c-string* ((c-string path))
 			  "
@@ -663,16 +694,30 @@ not tested it there either. File a bug report if it doesn't work for you.")
 		  (raise-posix-error 'read-symlink path))))
 
   (define (rename-file old-fname new-fname)
+	(@ "If you override an existing object, then old-fname and new-fname must type-match — either both directories, or both non-directories. This is required by the semantics of POSIX rename().
+Calling rename-file on a symbolic link will rename the symbolic link, not the file it refers to.
+    Remark: There is an unfortunate atomicity problem with the rename-file procedure: if you create file new-fname sometime between rename-file's existence check and the actual rename operation, your file will be clobbered with old-fname. There is no way to prevent this problem; at least it is highly unlikely to occur in practice."
+	  (old-fname "Existing name")
+	  (new-fname "New name")
+	  (@to "undefined"))
 	(let ((res ((foreign-lambda int "rename" c-string c-string) old-fname new-fname)))
 	  (if (< res 0)
 		  (raise-posix-error 'rename-file old-fname new-fname))))
 
   (define (delete-directory fname)
+	(@ "This procedure deletes directories from the file system. An error is signaled if fname is not a directory or is not empty."
+	  (fname "path")
+	  (@to "undefined"))
 	(let ((res ((foreign-lambda int "rmdir" c-string) fname)))
 	  (if (< res 0)
 		  (raise-posix-error 'delete-directory fname))))
 
   (define (set-file-owner fname uid gid)
+	(@ "This procedure sets the owner and group of a file specified by supplying the filename. If the uid argument is the constant owner/unchanged, the owner is not changed; if the gid argument is the constant group/unchanged, the group is not changed. Setting file ownership usually requires root privileges. This procedure follows symlinks and changes the files to which they refer."
+	   (fname "path")
+	   (uid "user id")
+	   (gid "group id")
+	   (@to "undefined"))
 	(let ((res ((foreign-lambda int "chown" c-string uid-t gid-t) fname uid gid)))
 	  (if (< res 0)
 		  (raise-posix-error 'set-file-owner fname))))
@@ -692,31 +737,47 @@ not tested it there either. File a bug report if it doesn't work for you.")
 
   (define AT_FDCWD            (foreign-value "AT_FDCWD" int))
   (define AT_SYMLINK_NOFOLLOW (foreign-value "AT_SYMLINK_NOFOLLOW" int))
-
-  (define (set-file-times fname/port atime mtime #!optional (follow? #t))
-  (let* ((ts-size (foreign-value "sizeof(struct timespec)" int))
-         (buf     (make-blob (* 2 ts-size)))
-         (flags   (if follow? 0 AT_SYMLINK_NOFOLLOW)))
-
-    (define (pack-srfi19-time! t offset)
-      (let ((sec  (time-second t))
-            (nsec (time-nanosecond t)))
-        ((foreign-lambda* void ((scheme-object b) (int off) (long s) (long ns))
-           "struct timespec *ts = (struct timespec *)(C_data_pointer(b) + off);
+  
+  (define (set-file-times fname/port access-time-object modify-time-object #!optional (follow? #t))
+	(@ "This procedure sets the access and modified times for the file fname to the supplied time object values. It is an error if they are not of type time-utc. If neither time argument is supplied, they are both taken to be the current time. The constants time/now and time/unchanged are bound to values used to specify the current time and an unchanged time respectively. It is an error if exactly one time is provided. This procedure will follow symlinks and set the times of the file to which it refers. If the procedure completes successfully, the file's time of last status-change (ctime) is set to the current time."
+	   (fname/port "A path or a scheme port")
+	   (access-time-object "A time object per srfi-19")
+	   (modify-time-object "A time object per srfi-19")
+	   (follow? "Follow the symbolic link? Default #t")
+	   (@to "undefined"))
+	(let* ((ts-size (foreign-value "sizeof(struct timespec)" int))
+           (buf     (make-blob (* 2 ts-size)))
+           (flags   (if follow? 0 AT_SYMLINK_NOFOLLOW)))
+	  
+      (define (pack-srfi19-time! t offset)
+		(let ((sec  (time-second t))
+              (nsec (time-nanosecond t)))
+          ((foreign-lambda* void ((scheme-object b) (int off) (long s) (long ns))
+			 "struct timespec *ts = (struct timespec *)(C_data_pointer(b) + off);
             ts->tv_sec = (time_t)s;
             ts->tv_nsec = (long)ns;") 
-         buf offset sec nsec)))
-
-    (pack-srfi19-time! atime 0)
-    (pack-srfi19-time! mtime ts-size)
-
-    (let ((status (if (port? fname/port)
-                      (%futimens (port->fileno fname/port) (location buf))
-                      (%utimensat AT_FDCWD fname/port (location buf) flags))))
-      (if (not (zero? status))
-		  (raise-posix-error 'set-file-times fname/port)))))
+           buf offset sec nsec)))
+	  
+      (pack-srfi19-time! access-time-object 0)
+      (pack-srfi19-time! modify-time-object ts-size)
+	  
+      (let ((status (if (port? fname/port)
+						(%futimens (port->fileno fname/port) (location buf))
+						(%utimensat AT_FDCWD fname/port (location buf) flags))))
+		(if (not (zero? status))
+			(raise-posix-error 'set-file-times fname/port)))))
   
+  (define (truncate-file fname/port #!optional (len 0))
+	@("The specified file is truncated to len bytes in length."
+	   (len "length in bytes")
+	   (@to "undefined"))
+	(let ((res 
+		   (cond ((string? fname/port) ((foreign-lambda int "truncate" c-string off-t) fname/port len))
+				 ((port? fname/port) ((foreign-lambda int "ftruncate" int off-t) (port->fileno fname/port) len)))))
+	  (if (< res 0)
+		  (raise-posix-error 'truncate-file fname/port))))
 
+  
   (foreign-declare "#include <sys/stat.h>")
 
   (foreign-declare "
@@ -731,29 +792,6 @@ not tested it there either. File a bug report if it doesn't work for you.")
   #define ST_NSEC(s, prefix) ((s)->st_ ## prefix ## tim.tv_nsec)
 #endif
 ")
-  
-  (define-record-type <file-info>
-	(make-file-info
-	 device inode mode nlinks uid gid rdev
-	 size atime mtime ctime blksize blocks)
-	file-info?
-	(device  file-info:device)
-	(inode   file-info:inode)
-	(mode    file-info:mode)
-	(nlinks  file-info:nlinks)
-	(uid     file-info:uid)
-	(gid     file-info:gid)
-	(rdev    file-info:rdev)
-	(size    file-info:size)
-	(atime   file-info:atime)
-	(mtime   file-info:mtime)
-	(ctime   file-info:ctime)
-	(blksize file-info:blksize)
-	(blocks  file-info:blocks))
-  
-  (define %stat  (foreign-lambda int "stat" c-string c-pointer))
-  (define %lstat (foreign-lambda int "lstat" c-string c-pointer))
-  (define %fstat (foreign-lambda int "fstat" int c-pointer))
   
   (define get-dev     (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_dev);"))
   (define get-ino     (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_ino);"))
@@ -816,85 +854,90 @@ not tested it there either. File a bug report if it doesn't work for you.")
 #endif
 ")
 
-(define-record-type <file-info>
-  (make-file-info
-   device inode mode nlinks uid gid rdev
-   size atime mtime ctime blksize blocks)
-  file-info?
-  (device  file-info:device)
-  (inode   file-info:inode)
-  (mode    file-info:mode)
-  (nlinks  file-info:nlinks)
-  (uid     file-info:uid)
-  (gid     file-info:gid)
-  (rdev    file-info:rdev)
-  (size    file-info:size)
-  (atime   file-info:atime)
-  (mtime   file-info:mtime)
-  (ctime   file-info:ctime)
-  (blksize file-info:blksize)
-  (blocks  file-info:blocks))
+  (define-record-type <file-info>
+	@("Record containing file information"
+	  (@full))
+	(make-file-info
+	 device inode mode nlinks uid gid rdev
+	 size atime mtime ctime blksize blocks)
+	file-info?
+	(device  file-info:device)
+	(inode   file-info:inode)
+	(mode    file-info:mode)
+	(nlinks  file-info:nlinks)
+	(uid     file-info:uid)
+	(gid     file-info:gid)
+	(rdev    file-info:rdev)
+	(size    file-info:size)
+	(atime   file-info:atime)
+	(mtime   file-info:mtime)
+	(ctime   file-info:ctime)
+	(blksize file-info:blksize)
+	(blocks  file-info:blocks))
 
 ;; --- FFI Bindings ---
 
-(define %stat  (foreign-lambda int "stat"  c-string c-pointer))
-(define %lstat (foreign-lambda int "lstat" c-string c-pointer))
-(define %fstat (foreign-lambda int "fstat" int      c-pointer))
-
-(define get-dev     (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_dev);"))
-(define get-ino     (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_ino);"))
-(define get-mode    (foreign-lambda* unsigned-int       ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_mode);"))
-(define get-nlink   (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_nlink);"))
-(define get-uid     (foreign-lambda* unsigned-int       ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_uid);"))
-(define get-gid     (foreign-lambda* unsigned-int       ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_gid);"))
-(define get-rdev    (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_rdev);"))
-(define get-size    (foreign-lambda* integer64          ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_size);"))
-(define get-blksize (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_blksize);"))
-(define get-blocks  (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_blocks);"))
-
-;; Basic seconds getters
-(define get-atime-sec (foreign-lambda* integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_atime);"))
-(define get-mtime-sec (foreign-lambda* integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_mtime);"))
-(define get-ctime-sec (foreign-lambda* integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_ctime);"))
-
-;; Nanoseconds getters using the ST_NSEC macro
-(define get-atime-nsec (foreign-lambda* integer64 ((scheme-object p)) "C_return(ST_NSEC((struct stat *)C_data_pointer(p), a));"))
-(define get-mtime-nsec (foreign-lambda* integer64 ((scheme-object p)) "C_return(ST_NSEC((struct stat *)C_data_pointer(p), m));"))
-(define get-ctime-nsec (foreign-lambda* integer64 ((scheme-object p)) "C_return(ST_NSEC((struct stat *)C_data_pointer(p), c));"))
-
-;; --- Type Predicates ---
-
-(define S_IFMT   (foreign-value "S_IFMT"   unsigned-int))
-(define S_IFDIR  (foreign-value "S_IFDIR"  unsigned-int))
-(define S_IFCHR  (foreign-value "S_IFCHR"  unsigned-int))
-(define S_IFBLK  (foreign-value "S_IFBLK"  unsigned-int))
-(define S_IFREG  (foreign-value "S_IFREG"  unsigned-int))
-(define S_IFLNK  (foreign-value "S_IFLNK"  unsigned-int))
-(define S_IFIFO  (foreign-value "S_IFIFO"  unsigned-int))
-(define S_IFSOCK (foreign-value "S_IFSOCK" unsigned-int))
-
-(define (file-info-type-is? info mask)
-  (= (bitwise-and (file-info:mode info) S_IFMT) mask))
-
-(define (file-info-directory? info)         (file-info-type-is? info S_IFDIR))
-(define (file-info-character-special? info) (file-info-type-is? info S_IFCHR))
-(define (file-info-block-special? info)     (file-info-type-is? info S_IFBLK))
-(define (file-info-regular? info)           (file-info-type-is? info S_IFREG))
-(define (file-info-symlink? info)           (file-info-type-is? info S_IFLNK))
-(define (file-info-fifo? info)              (file-info-type-is? info S_IFIFO))
-(define (file-info-socket? info)            (file-info-type-is? info S_IFSOCK))
-
-;; --- Main Procedure ---
-
-(define (file-info path-or-port #!optional (follow? #t))
-  (let ((buf (make-blob (foreign-value "sizeof(struct stat)" int))))
-    (if (zero?
-         (cond ((port? path-or-port)
-                (%fstat (port->fileno path-or-port) (location buf)))
-               (follow?
-                (%stat path-or-port (location buf)))
-               (else
-                (%lstat path-or-port (location buf)))))
+  (define %stat  (foreign-lambda int "stat"  c-string c-pointer))
+  (define %lstat (foreign-lambda int "lstat" c-string c-pointer))
+  (define %fstat (foreign-lambda int "fstat" int      c-pointer))
+  
+  (define get-dev     (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_dev);"))
+  (define get-ino     (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_ino);"))
+  (define get-mode    (foreign-lambda* unsigned-int       ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_mode);"))
+  (define get-nlink   (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_nlink);"))
+  (define get-uid     (foreign-lambda* unsigned-int       ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_uid);"))
+  (define get-gid     (foreign-lambda* unsigned-int       ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_gid);"))
+  (define get-rdev    (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_rdev);"))
+  (define get-size    (foreign-lambda* integer64          ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_size);"))
+  (define get-blksize (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_blksize);"))
+  (define get-blocks  (foreign-lambda* unsigned-integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_blocks);"))
+  
+  ;; Basic seconds getters
+  (define get-atime-sec (foreign-lambda* integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_atime);"))
+  (define get-mtime-sec (foreign-lambda* integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_mtime);"))
+  (define get-ctime-sec (foreign-lambda* integer64 ((scheme-object p)) "C_return(((struct stat *)C_data_pointer(p))->st_ctime);"))
+  
+  ;; Nanoseconds getters using the ST_NSEC macro
+  (define get-atime-nsec (foreign-lambda* integer64 ((scheme-object p)) "C_return(ST_NSEC((struct stat *)C_data_pointer(p), a));"))
+  (define get-mtime-nsec (foreign-lambda* integer64 ((scheme-object p)) "C_return(ST_NSEC((struct stat *)C_data_pointer(p), m));"))
+  (define get-ctime-nsec (foreign-lambda* integer64 ((scheme-object p)) "C_return(ST_NSEC((struct stat *)C_data_pointer(p), c));"))
+  
+  ;; --- Type Predicates ---
+  
+  (define S_IFMT   (foreign-value "S_IFMT"   unsigned-int))
+  (define S_IFDIR  (foreign-value "S_IFDIR"  unsigned-int))
+  (define S_IFCHR  (foreign-value "S_IFCHR"  unsigned-int))
+  (define S_IFBLK  (foreign-value "S_IFBLK"  unsigned-int))
+  (define S_IFREG  (foreign-value "S_IFREG"  unsigned-int))
+  (define S_IFLNK  (foreign-value "S_IFLNK"  unsigned-int))
+  (define S_IFIFO  (foreign-value "S_IFIFO"  unsigned-int))
+  (define S_IFSOCK (foreign-value "S_IFSOCK" unsigned-int))
+  
+  (define (file-info-type-is? info mask)
+	(= (bitwise-and (file-info:mode info) S_IFMT) mask))
+  
+  (define (file-info-directory? info)         (file-info-type-is? info S_IFDIR))
+  (define (file-info-character-special? info) (file-info-type-is? info S_IFCHR))
+  (define (file-info-block-special? info)     (file-info-type-is? info S_IFBLK))
+  (define (file-info-regular? info)           (file-info-type-is? info S_IFREG))
+  (define (file-info-symlink? info)           (file-info-type-is? info S_IFLNK))
+  (define (file-info-fifo? info)              (file-info-type-is? info S_IFIFO))
+  (define (file-info-socket? info)            (file-info-type-is? info S_IFSOCK))
+  
+  ;; --- Main Procedure ---
+  
+  (define (file-info fname/port #!optional (follow? #t))
+	@("The file-info procedure returns a file-info record containing useful information about a file. If the follow? flag is true the procedure will follow symlinks and report on the file to which they refer. If follow? is false the procedure checks the actual file itself, even if it's a symlink. The follow? flag is ignored if the file argument is a port."
+	 (fname/port "path or Scheme port")
+	 (follow? "Follow symlinks, default #t"))
+	(let ((buf (make-blob (foreign-value "sizeof(struct stat)" int))))
+      (if (zero?
+           (cond ((port? fname/port)
+                  (%fstat (port->fileno fname/port) (location buf)))
+				 (follow?
+                  (%stat fname/port (location buf)))
+				 (else
+                  (%lstat fname/port (location buf)))))
           (make-file-info
            (get-dev buf)
            (get-ino buf)
@@ -910,133 +953,69 @@ not tested it there either. File a bug report if it doesn't work for you.")
            (make-time time-utc (get-ctime-nsec buf) (get-ctime-sec buf))
            (get-blksize buf)
            (get-blocks buf))
-        (raise-posix-error 'file-info path-or-port))))
-
-  (define (truncate-file fname/port len)
-	(let ((res 
-		   (cond ((string? fname/port) ((foreign-lambda int "truncate" c-string off-t) fname/port len))
-				 ((port? fname/port) ((foreign-lambda int "ftruncate" int off-t) (port->fileno fname/port) len)))))
-	  (if (< res 0)
-		  (raise-posix-error 'truncate-file fname/port))))
+          (raise-posix-error 'file-info fname/port))))
+  
   
   (define (set-file-mode fname mode-bits)
-	(let ((res ((foreign-lambda int "chmod" c-string mode-t) fname mode-bits)))
-	  (if (< res 0)
-		  (raise-posix-error 'set-file-mode fname))))
-
-  (define (umask)
-	(let ((res ((foreign-lambda mode-t "umask" mode-t) 0)))
-	  ((foreign-lambda mode-t "umask" mode-t) res)
-	  res))
-
-  (define (set-umask! umask)
-	((foreign-lambda mode-t "umask" mode-t) umask))
-
-;  (define (current-directory)
-;	(or ((foreign-lambda* c-string* ()
-;			  "
-;    size_t sz = 1024;
-;    char * buf = malloc(sz);
-;    if (!buf) {
-;       C_return(NULL);
-;    }
-;    char *rtn = getcwd(buf, sz);
-;    while (rtn == NULL && errno == ERANGE) {
-;       sz *= 2;
-;       char * tmp = realloc(buf, sz);
-;       if (!tmp) {
-;           free(buf);
-;           C_return(NULL);
-;       }
-;       buf = tmp;
-;       rtn = getcwd(buf, sz);
-;    }
-;    if (rtn == NULL) {
-;       free(buf);
-;    }
-;    C_return(rtn);
-;       "))
-;		(raise-posix-error 'current-directory)))
-
-
-  (define (set-current-directory! new-directory)
-	(let ((res ((foreign-lambda int "chdir" c-string ) new-directory)))
-	  (if (< res 0)
-		  (raise-posix-error 'set-current-directory new-directory))))
-
-  (define (pid)
-	((foreign-lambda int "getpid")))
-
-  (define (nice #!optional (delta 1))
-	(set-errno! 0)
-	(let ((res ((foreign-lambda int "nice" int) delta)))
-	  (if (and (= res -1) (not (= (errno) 0)))
-		  (raise-posix-error 'nice delta))
-	  res))
-
-  (define (user-uid)
-	(let ((res ((foreign-lambda uid-t "getuid"))))
-	  (if (< res 0)
-		  (raise-posix-error 'user-uid))
-	  res))
-
-  (define (user-gid)
-	(let ((res ((foreign-lambda gid-t "getgid"))))
-	  (if (< res 0)
-		  (raise-posix-error 'user-gid))
-	  res))
-
-  (define (user-effective-uid)
-	(let ((res ((foreign-lambda uid-t "geteuid"))))
-	  (if (< res 0)
-		  (raise-posix-error 'user-uid))
-	  res))
-
-  (define (user-effective-gid)
-	(let ((res ((foreign-lambda gid-t "getegid"))))
-	  (if (< res 0)
-		  (raise-posix-error 'user-gid))
-	  res))
-
-  (foreign-declare "#include <unistd.h>")
-  (foreign-declare "#include <grp.h>")
+	@("This procedure sets the mode bits of a file specified by supplying the filename. This procedure follows symlinks and changes the files to which they refer."
+	  (fname "path")
+	  (mode-bits "permission bits"))
+	  (let ((res ((foreign-lambda int "chmod" c-string mode-t) fname mode-bits)))
+		(if (< res 0)
+			(raise-posix-error 'set-file-mode fname))))
   
-  ;; Returns the number of groups or -1 on error
-  (define %getgroups
-	(foreign-lambda int "getgroups" int c-pointer))
-  
-  ;; Extractor to get a specific GID out of the array at index i
-  (define get-gid-at-index
-	(foreign-lambda* unsigned-int ((scheme-object p) (int i))
-      "C_return(((gid_t *)C_data_pointer(p))[i]);"))
+  (define (directory-files dir #!optional (dot-files? #f))
+	@("Return a list of filenames in directory dir. The special . and .. names are never returned. 
+The directory dir is not prepended to each filename in the result list. That is,
+    (directory-files \"/etc\")
+returns
+    (\"chown\" \"exports\" \"fstab\" ...)
+not
+    (\"/etc/chown\" \"/etc/exports\" \"/etc/fstab\" ...)
+To use the filenames in the returned list, the programmer can either manually prepend the directory, or change to the directory before using the filenames."
+	(dir "path")
+	  (dot-files? "whether filenames beginning with \".\" are returned"))
+	(generator->list (make-directory-files-generator dir dot-files?)))
 
-  (define (user-supplementary-gids)
-  ;; Pass 1: Call with 0 to get the count of supplementary groups
-	(let ((count (%getgroups 0 #f)))
-      (if (= count -1)
-		  (raise-posix-error 'user-supplementary-gids)
-          (let ((buf (make-blob (* count (foreign-value "sizeof(gid_t)" int)))))
-			;; Pass 2: Provide the blob (via location) to be filled
-			(let ((actual-count (%getgroups count (location buf))))
-              (if (= actual-count -1)
-				  (raise-posix-error 'user-supplementary-gids)
-				  (list-tabulate actual-count 
-								 (lambda (n) (get-gid-at-index buf n)))))))))
+  (define (make-directory-files-generator dir #!optional (dot-files? #f))
+	@("Return a SRFI 158 generator of the filenames in directory dir. The special . and .. names are never returned. 
+Like directory-files above, the directory dir is not prepended to each filename in the results the generator returns.
+The generator approach is particularly useful when the number of items in a directory might be \"huge\", which has been a common paradigm when using a file system as a document database.
+Note that the generator must be run to exhaustion to close the underlying open directory object. As an extension to the standard, you can pass the symbol 'close to the generator to close it early."
+	  (dir "path")
+	  (dot-files? "whether filenames beginning with \".\" are returned"))
+	(let ((directory-object (open-directory dir)))
+	  ;; extension to SRFI-170, you can pass 'close to the generator to quit early.
+	  (lambda (#!optional (msg #f))
+		(if (eq? msg 'close)
+			(close-directory directory-object)
+			(read-directory directory-object dot-files?)))))
+	
 
   (define-record-type <directory-object>
+	@("Directory access handle"
+	 (@full))
 	(make-directory-object ptr)
 	directory-object?
-	(ptr directory-object:ptr directory-object:ptr-set!))
+	(ptr directory-object:ptr directory-object:ptr-set!)
+	(dot-files? directory-object:dot-files?))
   
-  (define (open-directory dir)
+  (define (open-directory dir #!optional (dot-files? #f))
+	@("opens the directory with the specified pathname for reading, returning an opaque directory object."
+	 (dir "path")
+	 (dot-files? "whether filenames beginning with \".\" are returned")
+	 (@to "directory-object"))
 	(let ((ptr ((foreign-lambda DIR* "opendir" c-string) dir)))
 	  (if ptr
-		  (let ((directory-object (make-directory-object ptr)))
+		  (let ((directory-object (make-directory-object ptr dot-files?)))
 			(begin (set-finalizer! directory-object close-directory)
 				   directory-object))
 		  (raise-posix-error 'open-directory dir))))
   
   (define (read-directory-entry directory-object)
+	@("returns the name of the next available file, or the end-of-file object if there are no more files. The special . and .. names are never returned."
+	 (directory-object "opaque directory object")
+	 (@to "dirent or eof-object"))
 	(let ((ptr (directory-object:ptr directory-object)))
 	  (if ptr
 		(let ((dirent ((foreign-lambda dirent* "readdir" DIR*) ptr)))
@@ -1047,19 +1026,25 @@ not tested it there either. File a bug report if it doesn't work for you.")
 			  dirent))
 		(raise-posix-error 'read-directory-entry directory-object))))
 
-  (define (read-directory directory-object #!optional (dot-files? #f))
+  (define (read-directory directory-object)
+	@("returns the name of the next available file, or the end-of-file object if there are no more files."
+	 (directory-object "opaque directory object")
+	 (@to "string or eof-object"))
 	(let ((dirent (read-directory-entry directory-object)))
 	  (if (eof-object? dirent)
 		  #!eof
 		  (let ((name (dirent:name dirent)))
 			(if (not (or (string=? name ".")
 						 (string=? name "..")
-						 (and (not dot-files?)
+						 (and (not (directory-object:dot-files? directory-object))
 							  (char=? (string-ref name 0) #\.))))
 				name
 				(read-directory directory-object))))))
   
   (define (close-directory directory-object)
+	@("closes a directory object."
+	 (directory-object "opaque directory object")
+	 (@to "undefined"))
 	(let ((ptr (directory-object:ptr directory-object)))
 	(when ptr
       ;; Only call C closedir if we haven't already
@@ -1078,21 +1063,22 @@ not tested it there either. File a bug report if it doesn't work for you.")
 	(foreign-lambda* unsigned-long ((dirent* dirent))
       "C_return(dirent->d_ino);"))
 
-  (define (make-directory-files-generator dir #!optional (dot-files? #f))
-	(let ((directory-object (open-directory dir)))
-	  ;; extension to SRFI-170, you can pass 'close to the generator to quit early.
-	  (lambda (#!optional (msg #f))
-		(if (eq? msg 'close)
-			(close-directory directory-object)
-			(read-directory directory-object dot-files?)))))
-	
-  (define (directory-files dir #!optional (dot-files? #f))
-	(generator->list (make-directory-files-generator dir dot-files?)))
-
+  (define (real-path path)
+	@("Returns an absolute pathname derived from pathname that names the same file and whose resolution does not involve dot (.), dot-dot (..), or symlinks."
+	 (path "path")
+	 (@to string))
+	(let* ((c-realpath (foreign-lambda c-string* "realpath" c-string c-pointer))
+		   (ptr (c-realpath path #f)))
+      (if ptr
+		  ptr
+          (raise-posix-error 'real-path path))))
+  
   (foreign-declare "#include <sys/statvfs.h>")
   
   ;; Define the record type to hold the results
   (define-record-type <file-system-info>
+	@("File system info record"
+	 (@full))
 	(make-file-system-info
 	 block-size
 	 fragment-size
@@ -1169,16 +1155,44 @@ not tested it there either. File a bug report if it doesn't work for you.")
 	(foreign-lambda* unsigned-integer64 ((scheme-object p))
       "C_return(((struct statvfs *)p)->f_namemax);"))
 
-  (define (file-space path-or-port)
-	(file-system-info:blocks-available (file-system-info path-or-port)))
+  
+  (define (file-system-info fname/port)
+	@("Read information about the file system"
+	 (fname/port "path or Scheme port")
+	 (@to "file-system-info"))
+	(let ((buf (make-blob (foreign-value "sizeof(struct timespec)" int))))
+       (if (zero?
+			(if (port? fname/port)
+				(%fstatvfs (port->fileno fname/port) (location buf))
+				(%statvfs fname/port (location buf))))
+			(make-file-system-info
+			 (get-bsize buf)
+			 (get-frsize buf)
+			 (get-blocks buf)
+			 (get-bfree buf)
+			 (get-bavail buf)
+			 (get-files buf)
+			 (get-ffree buf)
+			 (get-favail buf)
+			 (get-fsid buf)
+			 (get-flag buf)
+			 (get-namemax buf))
+			(raise-posix-error 'file-system-info fname/port))))
+
+  (define (file-space fname/port)
+	@("Returns the amount of free space in bytes on the same volume as the file path (if it is a string) or the file open on port (if it is a port). This allows the application to detect if the disk is getting full. Use path if the file has not yet been created, or port if it is already open."
+	 (fname/port "path or Scheme port")
+	 (@to "exact integer"))
+	(file-system-info:blocks-available (file-system-info fname/port)))
 
   (define temp-file-prefix
+	@("SRFI 39 or R7RS parameter that returns a string when invoked. Its initial value is the value of the environment variable TMPDIR concatenated with \"/pid\" if TMPDIR is set and to \"/tmp/pid\" otherwise, where pid is the id of the current process. On Windows, the temporary directory's name is not fixed, and must be obtained by the GetTempPath() API function.")
 	(let ((tmpdir (or (get-environment-variable "TMPDIR")
                       (get-environment-variable "TMP")
                       (get-environment-variable "TEMP")
                       "/tmp")))
       (string-append tmpdir "/" (number->string (pid)) "-")))
-
+  
   (foreign-declare "
 #include <stdlib.h>
 #include <unistd.h>
@@ -1194,6 +1208,13 @@ not tested it there either. File a bug report if it doesn't work for you.")
      C_return(1);"))
   
   (define (create-temp-file #!optional (prefix temp-file-prefix))
+	@("Creates a new temporary file and returns its name. The optional argument specifies the filename prefix to use, and defaults to the result of invoking temp-file-prefix. The procedure generates a sequence of filenames that have prefix as a common prefix, looking for a filename that doesn't already exist in the file system. When it finds one, it creates it with permission #o600 and returns the filename. (The file permission can be changed to a more permissive permission with set-file-mode after being created.)
+
+This file is guaranteed to be brand new. No other process will have it open. This procedure does not simply return a filename that is very likely to be unused. It returns a filename that definitely did not exist at the moment create-temp-file created it.
+
+It is not necessary for the process's pid to be a part of the filename for the uniqueness guarantees to hold. The pid component of the default prefix simply serves to scatter the name searches into sparse regions, so that collisions are less likely to occur. This speeds things up, but does not affect correctness."
+	 (temp-file-prefix "the filename prefix to use")
+	 (@to "string"))
 	;; We add a null character #\null to the end of the template
 	(let* ((template-str (string-append prefix "XXXXXX" "\x00"))
            (buffer (string->blob template-str)))
@@ -1205,6 +1226,40 @@ not tested it there either. File a bug report if it doesn't work for you.")
           (raise-posix-error 'create-temp-file prefix))))
   
   (define (call-with-temporary-filename maker #!optional (prefix temp-file-prefix) #!key (tries 10))
+	@("This procedure can be used to perform certain atomic transactions on the file system involving filenames. Some examples:
+
+    Linking a file to a fresh backup temp name.
+    Creating and opening an unused, secure temp file.
+    Creating an unused temporary directory. 
+
+This procedure uses prefix to generate a series of trial filenames. Prefix is a string, and defaults to the value of invoking temp-file-prefix. File names are generated by concatenating prefix with a varying string.
+
+The maker procedure is called serially on each filename generated. It must return at least one value; it may return multiple values. If the first return value is #f or if maker signals an exception indicating that the file exists, call-with-temporary-filename will loop, generating a new filename and calling maker again. If the first return value is true, the loop is terminated, returning whatever value(s) maker returned.
+
+After a number of unsuccessful trials, call-with-temporary-filename may give up, in which case an exception is signaled or propagated.
+
+To rename a file to a temporary name:
+
+    (call-with-temporary-filename
+      (lambda (backup)
+        (create-hard-link old-file backup)
+        backup)
+      \".temp.\") ; Keep link in current working directory
+    (delete-file old-file)
+
+Recall that this SRFI reports procedure failure by signaling an error. This is critical for this example — the programmer can assume that if the call-with-temporary-filename call returns, it returns successfully. So the following delete-file call can be reliably invoked, safe in the knowledge that the backup link has definitely been established.
+
+To create a unique temporary directory:
+
+    (call-with-temporary-filename
+      (lambda (dir)
+        (create-directory dir)
+        dir)
+      \"/tmp/tempdir.\")
+
+Similar operations can be used to generate unique fifos, or to return values other than the new filename (for example, an open port)."
+	  (@maker "")
+	  (@to "object"))
 	(let loop ((attempts tries))
       (if (zero? attempts)
 		  (raise-posix-error 'call-with-temporary-filename maker temp-file-prefix)
@@ -1214,35 +1269,136 @@ not tested it there either. File a bug report if it doesn't work for you.")
 			(or (condition-case (maker temp-path) (exn () #f))
 				(loop (- attempts 1)))))))
   
-  (define (file-system-info path-or-port)
-  ;; statvfs struct size varies, so we ask C for the size
-	(let ((buf (make-blob (foreign-value "sizeof(struct timespec)" int))))
-       (if (zero?
-			(if (port? path-or-port)
-				(%fstatvfs (port->fileno path-or-port) (location buf))
-				(%statvfs path-or-port (location buf))))
-			(make-file-system-info
-			 (get-bsize buf)
-			 (get-frsize buf)
-			 (get-blocks buf)
-			 (get-bfree buf)
-			 (get-bavail buf)
-			 (get-files buf)
-			 (get-ffree buf)
-			 (get-favail buf)
-			 (get-fsid buf)
-			 (get-flag buf)
-			 (get-namemax buf))
-			(raise-posix-error 'file-system-info path-or-port))))
+  (define (umask)
+	@("Returns the current file protection mask, or umask, as an exact integer. Whenever a file is created, the specified or default permissions are bitwise-anded with the complement of the umask before they are used."
+	  (@to "exact integer"))
+	(let ((res ((foreign-lambda mode-t "umask" mode-t) 0)))
+	  ((foreign-lambda mode-t "umask" mode-t) res)
+	  res))
   
-  (define (real-path path)
-	(let* ((c-realpath (foreign-lambda c-string* "realpath" c-string c-pointer))
-		   (ptr (c-realpath path #f)))
-      (if ptr
-		  ptr
-          (raise-posix-error 'real-path path))))
+  (define (set-umask! umask)
+	@("Sets the file protection mask to the exact integer umask and returns an unspecified value.
+    Warning: Although POSIX specifies that changing the umask affects all threads in the current process, some Scheme implementations maintain a separate simulated umask for each thread. As a result, the effects of this procedure in a multi-threaded program are only partly predictable. This SRFI recommends (but does not require) that in multi-threaded programs the mask be set in the primordial thread before any other threads are created and never changed again."
+	 (@to "unspecified"))
+	((foreign-lambda mode-t "umask" mode-t) umask))
 
-  (define-record-type <user-info>
+
+  (define (current-directory)
+	@("Returns the current directory as a string containing an absolute pathname. Whenever a file is referenced with a relative path, it is interpreted as relative to this directory."
+	 (@to "string"))
+	(or ((foreign-lambda* c-string* ()
+		   "
+   size_t sz = 1024;
+   char * buf = malloc(sz);
+   if (!buf) {
+      C_return(NULL);
+   }
+   char *rtn = getcwd(buf, sz);
+   while (rtn == NULL && errno == ERANGE) {
+      sz *= 2;
+      char * tmp = realloc(buf, sz);
+      if (!tmp) {
+          free(buf);
+          C_return(NULL);
+      }
+      buf = tmp;
+      rtn = getcwd(buf, sz);
+   }
+   if (rtn == NULL) {
+      free(buf);
+   }
+   C_return(rtn);
+      "))
+		(raise-posix-error 'current-directory)))
+
+
+  (define (set-current-directory! new-directory)
+	@("Sets the current directory to new-directory and returns an unspecified value.
+    Warning: Although POSIX specifies that changing the current directory affects all threads in the current process, some Scheme implementations maintain a separate simulated current directory for each thread. As a result, the effects of this procedure in a multi-threaded program are only partly predictable. This SRFI recommends (but does not require) that in multi-threaded programs the current directory be set in the primordial thread before any other threads are created and never changed again."
+	 (new-directory "directory path")
+	 (@to "unspecified"))
+	(let ((res ((foreign-lambda int "chdir" c-string ) new-directory)))
+	  (if (< res 0)
+		  (raise-posix-error 'set-current-directory new-directory))))
+
+  
+  (define (pid)
+	@("Retrieves the process id for the current process."
+	 (@to "exact integer"))
+	((foreign-lambda int "getpid")))
+
+  (define (nice #!optional (delta 1))
+	@("Increments the niceness of the current process by delta. The lower the niceness value is, the more the process is favored during scheduling. If delta is not specified, the increment is 1.
+    Real-time processes are not affected by nice."
+	 (@to "exact integer"))
+	(set-errno! 0)
+	(let ((res ((foreign-lambda int "nice" int) delta)))
+	  (if (and (= res -1) (not (= (errno) 0)))
+		  (raise-posix-error 'nice delta))
+	  res))
+
+  (define (user-uid)
+	@("Retrieves the current user's uid"
+	 (@to "exact integer"))
+	(let ((res ((foreign-lambda uid-t "getuid"))))
+	  (if (< res 0)
+		  (raise-posix-error 'user-uid))
+	  res))
+
+  (define (user-gid)
+	@("Retrieves the current user's group"
+	 (@to "exact integer"))
+	(let ((res ((foreign-lambda gid-t "getgid"))))
+	  (if (< res 0)
+		  (raise-posix-error 'user-gid))
+	  res))
+
+  (define (user-effective-uid)
+	@("Retrieves the current user's effective uid"
+	 (@to "exact integer"))
+	(let ((res ((foreign-lambda uid-t "geteuid"))))
+	  (if (< res 0)
+		  (raise-posix-error 'user-uid))
+	  res))
+
+  (define (user-effective-gid)
+	@("Retrieves the current user's effective gid"
+	 (@to "exact integer"))
+	(let ((res ((foreign-lambda gid-t "getegid"))))
+	  (if (< res 0)
+		  (raise-posix-error 'user-gid))
+	  res))
+
+  (foreign-declare "#include <unistd.h>")
+  (foreign-declare "#include <grp.h>")
+  
+  ;; Returns the number of groups or -1 on error
+  (define %getgroups
+	(foreign-lambda int "getgroups" int c-pointer))
+  
+  ;; Extractor to get a specific GID out of the array at index i
+  (define get-gid-at-index
+	(foreign-lambda* unsigned-int ((scheme-object p) (int i))
+      "C_return(((gid_t *)C_data_pointer(p))[i]);"))
+
+  (define (user-supplementary-gids)
+	@("Retrieve the current user's list of supplementary gids"
+	 (@to "exact integer list"))
+	;; Pass 1: Call with 0 to get the count of supplementary groups
+	(let ((count (%getgroups 0 #f)))
+      (if (= count -1)
+		  (raise-posix-error 'user-supplementary-gids)
+          (let ((buf (make-blob (* count (foreign-value "sizeof(gid_t)" int)))))
+			;; Pass 2: Provide the blob (via location) to be filled
+			(let ((actual-count (%getgroups count (location buf))))
+              (if (= actual-count -1)
+				  (raise-posix-error 'user-supplementary-gids)
+				  (list-tabulate actual-count 
+								 (lambda (n) (get-gid-at-index buf n)))))))))
+
+    (define-record-type <user-info>
+	@("Record about system user"
+	 (@full))
 	(make-user-info name password uid gid home-dir shell full-name parsed-full-name)
 	user-info?
 	(name             user-info:name)
@@ -1253,7 +1409,6 @@ not tested it there either. File a bug report if it doesn't work for you.")
 	(shell            user-info:shell)
 	(full-name        user-info:full-name)
 	(parsed-full-name user-info:parsed-full-name))
-
 
   
   (foreign-declare "#include <pwd.h>")
@@ -1320,7 +1475,10 @@ not tested it there either. File a bug report if it doesn't work for you.")
 				(cons expanded-name (cdr components)))))
 		'()))
   
-  (define (user-info user-or-uid)
+  (define (user-info uid/name)
+	@("Return a user-info record giving the recorded information for a particular user. The uid/name argument is either an exact integer user id or a string user name. If uid/name does not identify an existing user, #f is returned; this does not constitute an error situation, and callers must be prepared to handle it."
+	 (uid/name "User's uid or login name")
+	 (@to "user-info"))
 	(let* ((pwd-size   (foreign-value "sizeof(struct passwd)" int))
            (pwd-buf    (make-blob pwd-size))
            (result-ptr (make-blob (foreign-value "sizeof(struct passwd *)" int)))
@@ -1329,9 +1487,9 @@ not tested it there either. File a bug report if it doesn't work for you.")
 						 (if (< s 0) 1024 s))))
       (let loop ((buf-size init-size))
 		(let* ((str-buf (make-blob buf-size))
-               (status  (if (integer? user-or-uid)
-							(%getpwuid_r user-or-uid (location pwd-buf) (location str-buf) buf-size (location result-ptr))
-							(%getpwnam_r user-or-uid (location pwd-buf) (location str-buf) buf-size (location result-ptr)))))
+               (status  (if (integer? uid/name)
+							(%getpwuid_r uid/name (location pwd-buf) (location str-buf) buf-size (location result-ptr))
+							(%getpwnam_r uid/name (location pwd-buf) (location str-buf) buf-size (location result-ptr)))))
           
           (cond
            ;; 1. Success
@@ -1353,28 +1511,23 @@ not tested it there either. File a bug report if it doesn't work for you.")
 			(loop (* buf-size 2)))
            
            ;; 3. Actual error
-           (else (raise-posix-error 'user-info user-or-uid)))))))
+           (else (raise-posix-error 'user-info uid/name)))))))
 
   (define-record-type <group-info>
+	@("Record about system group"
+	 (@full))
 	(make-group-info name password gid members)
 	group-info?
 	(name     group-info:name)
 	(password group-info:password)
 	(gid      group-info:gid)
 	(members  group-info:members))
-  
+
   (foreign-declare "#include <grp.h>")
-
-  ;; int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct group **result);
-  (define %getgrgid_r
-	(foreign-lambda int "getgrgid_r" unsigned-int c-pointer c-pointer unsigned-long c-pointer))
-
-  ;; int getgrnam_r(const char *name, struct group *grp, char *buf, size_t buflen, struct group **result);
-  (define %getgrnam_r
-	(foreign-lambda int "getgrnam_r" c-string c-pointer c-pointer unsigned-long c-pointer))
-
-  ;; --- Getters ---
-
+  
+  (define %getgrgid_r (foreign-lambda int "getgrgid_r" unsigned-int c-pointer c-pointer unsigned-long c-pointer))
+  (define %getgrnam_r (foreign-lambda int "getgrnam_r" c-string c-pointer c-pointer unsigned-long c-pointer))
+  
   (define get-gr-name
 	(foreign-lambda* c-string ((scheme-object p))
       "C_return(((struct group *)C_data_pointer(p))->gr_name);"))
@@ -1387,7 +1540,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 	(foreign-lambda* unsigned-int ((scheme-object p))
       "C_return(((struct group *)C_data_pointer(p))->gr_gid);"))
   
-  (define get-gr-group-found?
+  (define get-gr-found?
 	(foreign-lambda* bool ((scheme-object p))
       "C_return(*(struct group **)C_data_pointer(p) != NULL);"))
 
@@ -1408,25 +1561,12 @@ not tested it there either. File a bug report if it doesn't work for you.")
 	(list-tabulate (get-gr-mem-count gr-buf)
                    (lambda (i) (get-gr-mem-at gr-buf i))))
 
-  (define-record-type <group-info>
-	(make-group-info name password gid members)
-	group-info?
-	(name     group-info:name)
-	(password group-info:password)
-	(gid      group-info:gid)
-	(members  group-info:members))
   
-(foreign-declare "#include <grp.h>")
 
-(define %getgrgid_r (foreign-lambda int "getgrgid_r" unsigned-int c-pointer c-pointer unsigned-long c-pointer))
-(define %getgrnam_r (foreign-lambda int "getgrnam_r" c-string c-pointer c-pointer unsigned-long c-pointer))
-
-(define get-gr-name   (foreign-lambda* c-string ((scheme-object p)) "C_return(((struct group *)C_data_pointer(p))->gr_name);"))
-(define get-gr-passwd (foreign-lambda* c-string ((scheme-object p)) "C_return(((struct group *)C_data_pointer(p))->gr_passwd);"))
-(define get-gr-gid    (foreign-lambda* unsigned-int ((scheme-object p)) "C_return(((struct group *)C_data_pointer(p))->gr_gid);"))
-(define get-gr-found? (foreign-lambda* bool ((scheme-object p)) "C_return(*(struct group **)C_data_pointer(p) != NULL);"))
-
-(define (group-info group-or-gid)
+(define (group-info gid-name)
+  @("Return a group-info record giving the recorded information for a particular group. The gid/name argument is either an exact integer group id or a string group name. If gid/name does not identify an existing group, #f is returned; this does not constitute an error situation, and callers must be prepared to handle it."
+   (gid/name "Group's gid or group name")
+   (@to "group-info"))
   (let* ((gr-size    (foreign-value "sizeof(struct group)" int))
          (gr-buf     (make-blob gr-size))
          (result-ptr (make-blob (foreign-value "sizeof(struct group *)" int)))
@@ -1434,9 +1574,9 @@ not tested it there either. File a bug report if it doesn't work for you.")
                        (if (< s 0) 1024 s))))
     (let loop ((buf-size init-size))
       (let* ((str-buf (make-blob buf-size))
-             (status  (if (integer? group-or-gid)
-                          (%getgrgid_r group-or-gid (location gr-buf) (location str-buf) buf-size (location result-ptr))
-                          (%getgrnam_r group-or-gid (location gr-buf) (location str-buf) buf-size (location result-ptr)))))
+             (status  (if (integer? gid-name)
+                          (%getgrgid_r gid-name (location gr-buf) (location str-buf) buf-size (location result-ptr))
+                          (%getgrnam_r gid-name (location gr-buf) (location str-buf) buf-size (location result-ptr)))))
         (cond
          ((zero? status)
           (if (get-gr-found? result-ptr)
@@ -1446,51 +1586,8 @@ not tested it there either. File a bug report if it doesn't work for you.")
                                (get-gr-members gr-buf))
               #f))
          ((= status ERANGE) (loop (* buf-size 2)))
-         (else (raise-posix-error 'group-info group-or-gid)))))))
+         (else (raise-posix-error 'group-info gid-name)))))))
   
-  ;; (define (user-info user-or-uid)
-  ;; 	(let ((ptr (if (integer? user-or-uid)
-  ;;                  (%getpwuid user-or-uid)
-  ;;                  (%getpwnam user-or-uid))))
-  ;;     (if ptr
-  ;;         (make-user-info
-  ;;          (get-pw-name ptr)
-  ;;          (get-pw-uid ptr)
-  ;;          (get-pw-gid ptr)
-  ;;          (get-pw-dir ptr)
-  ;;          (get-pw-shell ptr))
-  ;; 			(raise-posix-error 'user-info user-or-uid))))
-  
-  ;; (define (user-info user-id)
-  ;; 	(let ((raw (user-information user-id #t)))
-  ;;     (if (not raw)
-  ;;         (raise-posix-error 'user-info user-id)
-  ;; 		  (make-user-info
-  ;; 		   (vector-ref raw 0)
-  ;; 		   (vector-ref raw 2)
-  ;; 		   (vector-ref raw 3)
-  ;; 		   (vector-ref raw 5)
-  ;; 		   (vector-ref raw 6)
-  ;; 		   (vector-ref raw 4)
-  ;; 		   (vector-ref raw 4)))))
-
-  ;; (define-record-type <group-info>
-  ;; 	(make-group-info name gid members)
-  ;; 	group-info?
-  ;; 	(name    group-info:name)
-  ;; 	(gid     group-info:gid)
-  ;; 	(members group-info:members))
-
-  ;; (define (group-info group-id)
-  ;; 	(let ((raw (group-information group-id #t)))
-  ;;     (if (not raw)
-  ;;         (raise-posix-error 'group-info group-id)
-  ;;         (make-group-info
-  ;; 		   (vector-ref raw 0)
-  ;; 		   (vector-ref raw 2)
-  ;; 		   (vector-ref raw 3)))))
-
-
   (foreign-declare "#include <time.h>")
 
   (define %clock_gettime 
@@ -1512,6 +1609,8 @@ not tested it there either. File a bug report if it doesn't work for you.")
 		  #f)))
   
   (define (posix-time)
+	@("The posix-time procedure returns the current time as a time object of type time-utc, which represents the time since the POSIX epoch (midnight January 1, 1970 Universal Time), excluding leap seconds. It uses the POSIX CLOCK_REALTIME clock. "
+	 (@to "time-object"))
 	(let ((data (get-time (foreign-value "CLOCK_REALTIME" int))))
       (if data
           (make-time time-utc (car data) (cdr data))
@@ -1519,20 +1618,20 @@ not tested it there either. File a bug report if it doesn't work for you.")
   
   ;; This also seems to be defined in srfi-19, which is presumably wrong.
   (define (monotonic-time)
+	@("The monotonic-time procedure returns the current time as a time object of type time-monotonic, which represents the time since an arbitrary epoch. This epoch is arbitrary, but cannot change after the current program begins to run. It is guaranteed that a call to monotonic-time cannot return a time earlier than a previous call to monotonic-time. This is not guaranteed for posix-time because the system's POSIX clock is sometimes turned backward to correct local clock drift. It uses the POSIX CLOCK_MONOTONIC clock."
+	 (@to "time-object"))
 	(let ((data (get-time (foreign-value "CLOCK_MONOTONIC" int))))
       (if data
           (make-time time-utc (car data) (cdr data))
 		  (raise-posix-error 'posix-time))))
   
-  ;; chicken scheme already has set-environment-variable!
-  
-  ;; chicken scheme has an unset-environment-varaible! function, so we
-  ;; just need to rename it
-  (define delete-environment-variable! unset-environment-variable!)
+  (define delete-environment-variable!
+	@("Remove the environment variable name such that a subsequent (get-environment-variable name) would return #f. If the variable cannot be removed, an exception is signaled. If name does not currently have a value, the call silently succeeds.")
+	unset-environment-variable!)
   
   ;; chicken.port egg already defines it as called terminal-port?
   ;; Since it's inappropriate to rewrite the whole port system, we just rename
-  (define terminal? terminal-port?)
+  (define terminal? @(proc "Returns true if the argument is a file descriptor that is open on a terminal. Raises an exception if the underlying call to isatty() returns an error other than ENOTTY. This procedure is useful when writing programs that change their behavior when their standard input or output is a terminal. Because it is expected to be called before doing input or output on the terminal, it accepts a port rather than an file descriptor object." (@to "boolean")) terminal-port?)
   
   )
 
