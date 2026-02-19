@@ -1,8 +1,7 @@
 
 @(== "Abstract")
 
-@(" The host environment is the set of resources, such as the filesystem, network and processes, that are managed by the operating system on top of which a Scheme program is executing. This SRFI specifies some of the ways the host environment can be accessed from within a Scheme program. It does so by leveraging widespread support for POSIX, the Portable Operating System Interface standardized by the IEEE. Not all of the functions of this SRFI are available on all operating systems.
-")
+@("The host environment is the set of resources, such as the filesystem, network and processes, that are managed by the operating system on top of which a Scheme program is executing. This SRFI specifies some of the ways the host environment can be accessed from within a Scheme program. It does so by leveraging widespread support for POSIX, the Portable Operating System Interface standardized by the IEEE. Not all of the functions of this SRFI are available on all operating systems.")
 
 @(== "Rationale")
 
@@ -463,7 +462,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 	(if (and (condition? posix-error) 
 			 ((condition-predicate 'posix-error) posix-error))
 		(get-condition-property posix-error 'posix-error 'arguments)
-		(error "Object is not a posix-error condition" err)))
+		(error "Object is not a posix-error condition" posix-error)))
   
   
 ;;;;;;;;;;;;;; TODO: Implement posix-error-c-function ;;;;;;;;;;;;;;;;;;;;
