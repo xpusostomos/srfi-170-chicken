@@ -2,3 +2,4 @@
 (uri targz "https://github.com/xpusostomos/srfi-170-chicken/archive/v{egg-release}.tar.gz")
 (release "0.7")
  (release "0.8")
+(release "0.8")
