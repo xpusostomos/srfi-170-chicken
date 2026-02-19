@@ -3,7 +3,7 @@
  (maintainer "Chris Bitmead")
  (category data)
  (license "MIT")
- (version "0.13")
+ (version "0.14")
  (dependencies
    srfi-1
    srfi-13
@@ -11,4 +11,5 @@
    srfi-121)
 ; (test-dependencies test)
  (components
-  (extension srfi-170)))
+  (extension srfi-170
+    (csc-options "-X" "chalk"))))
