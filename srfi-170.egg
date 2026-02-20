@@ -10,7 +10,7 @@
    srfi-19
    srfi-121
    chalk)
-; (test-dependencies test)
+ (test-dependencies test)
  (components
   (extension srfi-170
     (csc-options "-X" "chalk"))))

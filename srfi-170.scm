@@ -85,7 +85,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 				  set-file-times
 				  truncate-file
 				  file-info
-				  file-info
+				  file-info?
 				  file-info:device
 				  file-info:inode
 				  file-info:mode
@@ -184,7 +184,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 
   @(== "Error Handling")
 
-  @(" The C binding of POSIX places an error number in the global variable errno to report an error, along with (in most cases) returning a sentinel value such as -1. However, the procedures of this SRFI work differently. Rather than reporting errors as return values, they report errors by signaling condition objects satisfying the predicate posix-error? defined below.")
+  @("The C binding of POSIX places an error number in the global variable errno to report an error, along with (in most cases) returning a sentinel value such as -1. However, the procedures of this SRFI work differently. Rather than reporting errors as return values, they report errors by signaling condition objects satisfying the predicate posix-error? defined below.")
 
   @("This SRFI provides three procedures which will typically be shims over whatever the implementation uses to report such errors:")
 
@@ -411,7 +411,10 @@ not tested it there either. File a bug report if it doesn't work for you.")
 		(make-property-condition 'file-error)
 		(make-property-condition 'posix-error 
 								 'errno err-num 
-								 'name err-name)))))
+								 'name err-name
+								 'message err-msg 
+								 'location loc 
+								 'arguments args)))))
   
   (define (posix-error? obj)
 	@("This procedure returns #t if obj is a condition object that describes a POSIX error, and #f otherwise."
@@ -420,9 +423,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 	((condition-predicate 'posix-error) obj))
   
   (define (posix-error-name posix-error)
-	@("This procedure returns a symbol that is the name associated with the value of errno when the POSIX function reported an error. This can be used to provide programmatic recovery when a POSIX function can return more than one value of errno.
-    Because the errno codes are not standardized across different POSIX systems, but the associated names (bound by a #define in the file /usr/include/errno.h) are the same for the most part, this function returns the name rather than the code.
-    For example, ENOENT (a reference was made to a file or a directory that does not exist) almost always corresponds to an errno value of 2. But although ETIMEDOUT (meaning that a TCP connection has been unresponsive for too long) is standardized by POSIX, it has a errno value of 110 on Linux, 60 on FreeBSD, and 116 on Cygwin."
+	@("This procedure returns a symbol that is the name associated with the value of errno when the POSIX function reported an error. This can be used to provide programmatic recovery when a POSIX function can return more than one value of errno. Because the errno codes are not standardized across different POSIX systems, but the associated names (bound by a #define in the file /usr/include/errno.h) are the same for the most part, this function returns the name rather than the code. For example, ENOENT (a reference was made to a file or a directory that does not exist) almost always corresponds to an errno value of 2. But although ETIMEDOUT (meaning that a TCP connection has been unresponsive for too long) is standardized by POSIX, it has a errno value of 110 on Linux, 60 on FreeBSD, and 116 on Cygwin."
 	  (posix-error "A condition error object")
 	  (@to "symbol"))
 	(if (and (condition? posix-error) 
@@ -443,7 +444,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 	@("Returns a human-readable string describing the POSIX error described by the condition object obj."
 	  (posix-error "A condition error object")
 	  (@to "string"))
-	  (if (and (condition? posix-error) 
+  	  (if (and (condition? posix-error) 
 			   ((condition-predicate 'posix-error) posix-error))
 		  (get-condition-property posix-error 'posix-error 'message)
 		  (error "Object is not a posix-error condition" posix-error)))
@@ -552,7 +553,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 
 
   (define (open-file fname port-type flags #!optional (permission-bits #o644) (buffer-mode buffer-block))
-	(@ "Opens the file named by fname and returns a port of the type specified by port-type. Flags is an integer bitmask, composed by adding together any of the following constants: open/append, open/create, open/exclusive, open/nofollow, open/truncate. (The POSIX flags O_RDONLY, R_WRONLY, and O_RDWR are inferred from the port type.) Permission-bits defaults to #o666, but are masked by the current umask."
+	@("Opens the file named by fname and returns a port of the type specified by port-type. Flags is an integer bitmask, composed by adding together any of the following constants: open/append, open/create, open/exclusive, open/nofollow, open/truncate. (The POSIX flags O_RDONLY, R_WRONLY, and O_RDWR are inferred from the port type.) Permission-bits defaults to #o666, but are masked by the current umask."
 			 (fname "The file name")
 			 (port-type "constant for binary/textual input/output")
 			 (flags "open/append, open/create, open/exclusive, open/nofollow, open/truncate")
@@ -580,7 +581,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
   
   
   (define (fd->port fd port-type #!optional (buffer-mode buffer-block))
-	(@ "This procedure wraps a newly created port around the specified file descriptor, effectively importing it into the Scheme world. The most common use of this procedure is for a file descriptor other than 0, 1, 2 (standard input, standard output, standard error) that is already open when the Scheme program starts. It is an error if a port already exists that encapsulates fd, or if an attempt is made to use fd->port twice on the same fd."
+	@("This procedure wraps a newly created port around the specified file descriptor, effectively importing it into the Scheme world. The most common use of this procedure is for a file descriptor other than 0, 1, 2 (standard input, standard output, standard error) that is already open when the Scheme program starts. It is an error if a port already exists that encapsulates fd, or if an attempt is made to use fd->port twice on the same fd."
 	   (fd "File descriptor")
 	   (port-type "constant for binary/textual input/output")
 	   (buffer-mode "buffer-none, buffer-block, buffer-line")
@@ -694,7 +695,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 		  (raise-posix-error 'read-symlink path))))
 
   (define (rename-file old-fname new-fname)
-	(@ "If you override an existing object, then old-fname and new-fname must type-match — either both directories, or both non-directories. This is required by the semantics of POSIX rename().
+	@("If you override an existing object, then old-fname and new-fname must type-match — either both directories, or both non-directories. This is required by the semantics of POSIX rename().
 Calling rename-file on a symbolic link will rename the symbolic link, not the file it refers to.
     Remark: There is an unfortunate atomicity problem with the rename-file procedure: if you create file new-fname sometime between rename-file's existence check and the actual rename operation, your file will be clobbered with old-fname. There is no way to prevent this problem; at least it is highly unlikely to occur in practice."
 	  (old-fname "Existing name")
@@ -705,7 +706,7 @@ Calling rename-file on a symbolic link will rename the symbolic link, not the fi
 		  (raise-posix-error 'rename-file old-fname new-fname))))
 
   (define (delete-directory fname)
-	(@ "This procedure deletes directories from the file system. An error is signaled if fname is not a directory or is not empty."
+	@("This procedure deletes directories from the file system. An error is signaled if fname is not a directory or is not empty."
 	  (fname "path")
 	  (@to "undefined"))
 	(let ((res ((foreign-lambda int "rmdir" c-string) fname)))
@@ -713,7 +714,7 @@ Calling rename-file on a symbolic link will rename the symbolic link, not the fi
 		  (raise-posix-error 'delete-directory fname))))
 
   (define (set-file-owner fname uid gid)
-	(@ "This procedure sets the owner and group of a file specified by supplying the filename. If the uid argument is the constant owner/unchanged, the owner is not changed; if the gid argument is the constant group/unchanged, the group is not changed. Setting file ownership usually requires root privileges. This procedure follows symlinks and changes the files to which they refer."
+	@("This procedure sets the owner and group of a file specified by supplying the filename. If the uid argument is the constant owner/unchanged, the owner is not changed; if the gid argument is the constant group/unchanged, the group is not changed. Setting file ownership usually requires root privileges. This procedure follows symlinks and changes the files to which they refer."
 	   (fname "path")
 	   (uid "user id")
 	   (gid "group id")
@@ -739,7 +740,7 @@ Calling rename-file on a symbolic link will rename the symbolic link, not the fi
   (define AT_SYMLINK_NOFOLLOW (foreign-value "AT_SYMLINK_NOFOLLOW" int))
   
   (define (set-file-times fname/port access-time-object modify-time-object #!optional (follow? #t))
-	(@ "This procedure sets the access and modified times for the file fname to the supplied time object values. It is an error if they are not of type time-utc. If neither time argument is supplied, they are both taken to be the current time. The constants time/now and time/unchanged are bound to values used to specify the current time and an unchanged time respectively. It is an error if exactly one time is provided. This procedure will follow symlinks and set the times of the file to which it refers. If the procedure completes successfully, the file's time of last status-change (ctime) is set to the current time."
+	@("This procedure sets the access and modified times for the file fname to the supplied time object values. It is an error if they are not of type time-utc. If neither time argument is supplied, they are both taken to be the current time. The constants time/now and time/unchanged are bound to values used to specify the current time and an unchanged time respectively. It is an error if exactly one time is provided. This procedure will follow symlinks and set the times of the file to which it refers. If the procedure completes successfully, the file's time of last status-change (ctime) is set to the current time."
 	   (fname/port "A path or a scheme port")
 	   (access-time-object "A time object per srfi-19")
 	   (modify-time-object "A time object per srfi-19")
@@ -769,8 +770,9 @@ Calling rename-file on a symbolic link will rename the symbolic link, not the fi
   
   (define (truncate-file fname/port #!optional (len 0))
 	@("The specified file is truncated to len bytes in length."
-	   (len "length in bytes")
-	   (@to "undefined"))
+	  (fname/port "path or Scheme port")
+	  (len "length in bytes")
+	  (@to "undefined"))
 	(let ((res 
 		   (cond ((string? fname/port) ((foreign-lambda int "truncate" c-string off-t) fname/port len))
 				 ((port? fname/port) ((foreign-lambda int "ftruncate" int off-t) (port->fileno fname/port) len)))))
@@ -953,7 +955,7 @@ Calling rename-file on a symbolic link will rename the symbolic link, not the fi
            (make-time time-utc (get-ctime-nsec buf) (get-ctime-sec buf))
            (get-blksize buf)
            (get-blocks buf))
-          (raise-posix-error 'file-info fname/port))))
+          (raise-posix-error 'file-info fname/port follow?))))
   
   
   (define (set-file-mode fname mode-bits)
@@ -962,7 +964,7 @@ Calling rename-file on a symbolic link will rename the symbolic link, not the fi
 	  (mode-bits "permission bits"))
 	  (let ((res ((foreign-lambda int "chmod" c-string mode-t) fname mode-bits)))
 		(if (< res 0)
-			(raise-posix-error 'set-file-mode fname))))
+			(raise-posix-error 'set-file-mode fname mode-bits))))
   
   (define (directory-files dir #!optional (dot-files? #f))
 	@("Return a list of filenames in directory dir. The special . and .. names are never returned. 
@@ -989,13 +991,14 @@ Note that the generator must be run to exhaustion to close the underlying open d
 	  (lambda (#!optional (msg #f))
 		(if (eq? msg 'close)
 			(close-directory directory-object)
+			;; read auto closes when it gets to the end
 			(read-directory directory-object dot-files?)))))
 	
 
   (define-record-type <directory-object>
 	@("Directory access handle"
 	 (@full))
-	(make-directory-object ptr)
+	(make-directory-object ptr dot-files?)
 	directory-object?
 	(ptr directory-object:ptr directory-object:ptr-set!)
 	(dot-files? directory-object:dot-files?))
@@ -1008,14 +1011,11 @@ Note that the generator must be run to exhaustion to close the underlying open d
 	(let ((ptr ((foreign-lambda DIR* "opendir" c-string) dir)))
 	  (if ptr
 		  (let ((directory-object (make-directory-object ptr dot-files?)))
-			(begin (set-finalizer! directory-object close-directory)
-				   directory-object))
-		  (raise-posix-error 'open-directory dir))))
+			(set-finalizer! directory-object close-directory)
+			directory-object)
+		  (raise-posix-error 'open-directory dir dot-files?))))
   
   (define (read-directory-entry directory-object)
-	@("returns the name of the next available file, or the end-of-file object if there are no more files. The special . and .. names are never returned."
-	 (directory-object "opaque directory object")
-	 (@to "dirent or eof-object"))
 	(let ((ptr (directory-object:ptr directory-object)))
 	  (if ptr
 		(let ((dirent ((foreign-lambda dirent* "readdir" DIR*) ptr)))
@@ -1046,13 +1046,13 @@ Note that the generator must be run to exhaustion to close the underlying open d
 	 (directory-object "opaque directory object")
 	 (@to "undefined"))
 	(let ((ptr (directory-object:ptr directory-object)))
-	(when ptr
-      ;; Only call C closedir if we haven't already
-      ((foreign-lambda int "closedir" DIR*) ptr)
-      ;; Crucial: Tag the object as closed so the finalizer does nothing
-	  (directory-object:ptr-set! directory-object #f)
-      (set-finalizer! directory-object (lambda args (void))))))
-	
+	  (when ptr
+		;; Only call C closedir if we haven't already
+		((foreign-lambda int "closedir" DIR*) ptr)
+		;; Crucial: Tag the object as closed so the finalizer does nothing
+		(directory-object:ptr-set! directory-object #f)
+		(set-finalizer! directory-object (lambda args (void))))))
+  
   (define (dirent:name dirent)
 	(if (eof-object? dirent)
 		dirent
@@ -1187,11 +1187,7 @@ Note that the generator must be run to exhaustion to close the underlying open d
 
   (define temp-file-prefix
 	@("SRFI 39 or R7RS parameter that returns a string when invoked. Its initial value is the value of the environment variable TMPDIR concatenated with \"/pid\" if TMPDIR is set and to \"/tmp/pid\" otherwise, where pid is the id of the current process. On Windows, the temporary directory's name is not fixed, and must be obtained by the GetTempPath() API function.")
-	(let ((tmpdir (or (get-environment-variable "TMPDIR")
-                      (get-environment-variable "TMP")
-                      (get-environment-variable "TEMP")
-                      "/tmp")))
-      (string-append tmpdir "/" (number->string (pid)) "-")))
+	#f)
   
   (foreign-declare "
 #include <stdlib.h>
@@ -1278,7 +1274,8 @@ Similar operations can be used to generate unique fifos, or to return values oth
   
   (define (set-umask! umask)
 	@("Sets the file protection mask to the exact integer umask and returns an unspecified value.
-    Warning: Although POSIX specifies that changing the umask affects all threads in the current process, some Scheme implementations maintain a separate simulated umask for each thread. As a result, the effects of this procedure in a multi-threaded program are only partly predictable. This SRFI recommends (but does not require) that in multi-threaded programs the mask be set in the primordial thread before any other threads are created and never changed again."
+
+Warning: Although POSIX specifies that changing the umask affects all threads in the current process, some Scheme implementations maintain a separate simulated umask for each thread. As a result, the effects of this procedure in a multi-threaded program are only partly predictable. This SRFI recommends (but does not require) that in multi-threaded programs the mask be set in the primordial thread before any other threads are created and never changed again."
 	 (@to "unspecified"))
 	((foreign-lambda mode-t "umask" mode-t) umask))
 
@@ -1327,6 +1324,15 @@ Similar operations can be used to generate unique fifos, or to return values oth
 	 (@to "exact integer"))
 	((foreign-lambda int "getpid")))
 
+  (set! temp-file-prefix
+	(let ((tmpdir (or (get-environment-variable "TMPDIR")
+                      (get-environment-variable "TMP")
+                      (get-environment-variable "TEMP")
+                      "/tmp")))
+      (string-append tmpdir "/" (number->string (pid)) "-")))
+  
+
+  
   (define (nice #!optional (delta 1))
 	@("Increments the niceness of the current process by delta. The lower the niceness value is, the more the process is favored during scheduling. If delta is not specified, the increment is 1.
     Real-time processes are not affected by nice."
@@ -1626,7 +1632,9 @@ Similar operations can be used to generate unique fifos, or to return values oth
 		  (raise-posix-error 'posix-time))))
   
   (define delete-environment-variable!
-	@("Remove the environment variable name such that a subsequent (get-environment-variable name) would return #f. If the variable cannot be removed, an exception is signaled. If name does not currently have a value, the call silently succeeds.")
+	@(proc "Remove the environment variable name such that a subsequent (get-environment-variable name) would return #f. If the variable cannot be removed, an exception is signaled. If name does not currently have a value, the call silently succeeds."
+		   (name "variable name")
+		   (@to "undefined"))
 	unset-environment-variable!)
   
   ;; chicken.port egg already defines it as called terminal-port?
