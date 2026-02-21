@@ -108,6 +108,7 @@ not tested it there either. File a bug report if it doesn't work for you.")
 				  set-file-mode
 				  directory-files
 				  make-directory-files-generator
+				  directory-object?
 				  open-directory
 				  read-directory-entry
 				  dirent:name
@@ -136,6 +137,12 @@ not tested it there either. File a bug report if it doesn't work for you.")
 				  current-directory
 				  set-current-directory!
 				  pid
+				  parent-pid
+				  process-group
+				  create-session
+				  set-process-group!
+				  terminal-foreground-process-group
+				  set-terminal-foreground-process-group!
 				  nice
 				  user-uid
 				  user-gid
@@ -1324,6 +1331,60 @@ Warning: Although POSIX specifies that changing the umask affects all threads in
 	 (@to "exact integer"))
 	((foreign-lambda int "getpid")))
 
+  (define (parent-pid)
+	@("Retrieves the parent process id for the current process."
+	 (@to "exact integer"))
+	((foreign-lambda int "getppid")))
+
+  (define (process-group)
+	@("Retrieves the process group id for the current process."
+	 (@to "exact integer"))
+	((foreign-lambda int "getpgrp")))
+
+  (define %setsid (foreign-lambda int "setsid"))
+  (define (create-session)
+	@("Creates a new session and sets the process group ID of the calling process to its PID."
+      (@to "integer"))
+	(let ((sid (%setsid)))
+      (if (= sid -1)
+          (raise-posix-error 'create-session)
+          sid)))
+    
+  (define %setpgid
+	(foreign-lambda int "setpgid" int int))
+  
+  (define (set-process-group! pid process-group)
+	@("Sets the process group ID of the process specified by pid to pgid."
+      (pid  "Integer process ID (0 for current process)")
+      (pgid "Integer process group ID (0 to match pid)")
+      (@to "unspecified"))
+	(let ((status (%setpgid pid process-group)))
+      (if (= status -1)
+          (raise-posix-error 'set-process-group-id! pid process-group)
+          (void))))
+
+  (define %tcgetpgrp (foreign-lambda int "tcgetpgrp" int))
+  (define %tcsetpgrp (foreign-lambda int "tcsetpgrp" int int))
+
+  (define (terminal-foreground-process-group fd)
+	@("Returns the process group ID of the foreground process group on the terminal associated with fd."
+      (fd "Integer file descriptor")
+      (@to "integer"))
+	(let ((pgid (%tcgetpgrp fd)))
+      (if (= pgid -1)
+          (raise-posix-error 'terminal-foreground-process-group fd)
+          pgid)))
+  
+  (define (set-terminal-foreground-process-group! fd process-group)
+	@("Sets the foreground process group ID of the terminal associated with fd to pgid."
+      (fd   "Integer file descriptor")
+      (pgid "Integer process group ID")
+      (@to "unspecified"))
+	(let ((status (%tcsetpgrp fd process-group)))
+      (if (= status -1)
+          (raise-posix-error 'set-terminal-foreground-process-group! fd process-group)
+          (void))))
+  
   (set! temp-file-prefix
 	(let ((tmpdir (or (get-environment-variable "TMPDIR")
                       (get-environment-variable "TMP")

@@ -1,5 +1,6 @@
 (import test srfi-170 srfi-19 (chicken file) (chicken condition))
 (import (only (chicken bitwise) bitwise-and bitwise-ior))
+(import (only (chicken file posix) port->fileno))
 
 (test-begin "srfi-170-final-rigorous")
 
@@ -27,15 +28,12 @@
       (test "close-port" #t (begin (close-output-port fd) #t)))
     
     ;; Reading with 0 flags and buffer-none constant
-    (let* ((fd (open-file fn textual-input 0))
-           (port (fd->port fd buffer-none)))
+    (let* ((fd (port->fileno (open-file fn textual-input 0)))
+           (port (fd->port fd textual-input)))
       (test "fd->port" #t (input-port? port))
-      (test "port->fd" fd (port->fd port))
+      (test "port->fd" fd (port->fileno port))
       (close-input-port port))
     
-    (test "stdin-fd" 0 (stdin-fd))
-    (test "stdout-fd" 1 (stdout-fd))
-    (test "stderr-fd" 2 (stderr-fd))
     (delete-file fn)))
 
   ;; --- 3. File System ---
@@ -117,34 +115,34 @@
 
 ;; --- 5. Directory Streams ---
 (test-group "5. Directory Streams"
-  (let ((ds (open-directory-stream ".")))
-    (test "directory-stream?" #t (directory-stream? ds))
-    (test "read-directory-stream" #t (string? (read-directory-stream ds)))
-    (test "close-directory-stream" #t (begin (close-directory-stream ds) #t))))
+  (let ((ds (open-directory ".")))
+    (test "directory-object?" #t (directory-object? ds))
+    (test "read-directory" #t (string? (read-directory ds)))
+    (test "close-directory" #t (begin (close-directory ds) #t))))
 
 ;; --- 6. Process Environment ---
 (test-group "6. Process Environment"
-  (test "working-directory" #t (string? (working-directory)))
-  (test "set-working-directory" #t (begin (set-working-directory (working-directory)) #t))
+  (test "working-directory" #t (string? (current-directory)))
+  (test "set-working-directory" #t (begin (set-current-directory! (current-directory)) #t))
   (test "pid" #t (integer? (pid)))
   (test "parent-pid" #t (integer? (parent-pid)))
-  (test "envvar" #t (string? (envvar "PATH")))
-  (test "envvars" #t (list? (envvars))))
+  (test "get-environment-variable" #t (string? (get-environment-variable "PATH")))
+  (test "get-environment-variables" #t (list? (get-environment-variables))))
 
 ;; --- 7. User and Group Information ---
 (test-group "7. User and Group"
-  (test "uid" #t (integer? (uid)))
-  (test "euid" #t (integer? (euid)))
-  (test "gid" #t (integer? (gid)))
-  (test "egid" #t (integer? (egid)))
+  (test "user-uid" #t (integer? (user-uid)))
+  (test "user-effective-uid" #t (integer? (user-effective-uid)))
+  (test "user-gid" #t (integer? (user-gid)))
+  (test "user-effective-gid" #t (integer? (user-effective-gid)))
   
-  (let* ((u-id (uid)) (u (user-info u-id)))
+  (let* ((u-id (user-uid)) (u (user-info u-id)))
     (test "user-info?" #t (user-info? u))
     (test "user-info:name" #t (string? (user-info:name u)))
     (test "user-info:uid" u-id (user-info:uid u))
     (test "user-info:home-dir" #t (string? (user-info:home-dir u))))
   
-  (let* ((g-id (gid)) (g (group-info g-id)))
+  (let* ((g-id (user-gid)) (g (group-info g-id)))
     (test "group-info?" #t (group-info? g))
     (test "group-info:name" #t (string? (group-info:name g)))))
 
